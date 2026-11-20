@@ -42,12 +42,13 @@
 
   // ---- Devices and derived attributes ---------------------------------
   const ALL = TL.DEVICES.slice();
+  const ALL_BY_ID = {}; ALL.forEach(function (d) { ALL_BY_ID[d.id] = d; });
   function hash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0) / 4294967295; }
   const RAM = { edge: [4, 8, 8, 16], vm: [8, 16, 32, 32], k8s: [16, 32, 64, 64], metal: [32, 64, 128, 256] };
   function ram(d) { const o = RAM[d.attrs.type] || RAM.vm; return o[Math.floor(hash(d.id + 'ram') * o.length)]; }
   const VOL = { edge: [20, 90], vm: [60, 220], k8s: [150, 600], metal: [120, 480] }; // MB/day sent by the device's snaps
   function devVol(d) { const r = VOL[d.attrs.type] || VOL.vm; return r[0] + hash(d.id + 'vol') * (r[1] - r[0]); }
-  const STORE_VOL = 40; // MB/day of update traffic with the store, both ways (refresh checks out, snap downloads in)
+  const STORE_VOL = 8; // MB/day of update traffic with the store, both ways (refresh checks out, snap downloads in)
   function snapsOf(d) { return (d.extras && d.extras.apps) || []; }
 
   function attrLabel(key, id) {
@@ -153,7 +154,7 @@
     } else {
       setAna(s, 'group', true); setAna(s, 'policy', true);
       s.destinations.push({ id: 'ana-dest', name: 'Splunk SIEM', type: 'Splunk', cls: 'internal', region: 'EU', by: ANA, at: now() });
-      s.connectors.push({ id: id, name: 'Production to Splunk', group: 'ana-group', policy: 'ana-policy', dest: 'ana-dest', by: ANA, at: now() });
+      s.connectors.push({ id: id, name: 'Production to Splunk', group: 'ana-group', snaps: 'all', policy: 'ana-policy', dest: 'ana-dest', by: ANA, at: now() });
       s.changes.unshift({ who: ANA, ana: kind, what: 'activated connector <strong>Production to Splunk</strong> (' + s.groups.filter(function (g) { return g.id === 'ana-group'; })[0].name + ' → Splunk SIEM, Internal)', at: now() });
     }
   }
@@ -196,30 +197,62 @@
   const REGIONS = ['EU', 'UK', 'US', 'APAC', 'Global'];
   function leaves(dest) { return dest && (dest.cls === 'external' || dest.cls === 'partner'); }
 
+  // ---- Snaps (publishers) ---------------------------------------------
+  // A device's snaps: its applications plus the Canonical snaps it runs.
+  function deviceSnaps(d) {
+    const out = snapsOf(d).slice();
+    if (d.extras && d.extras.landscape) out.push('landscape');
+    if (d.attrs.juju && d.attrs.juju !== 'none') out.push('juju');
+    if (d.attrs.maas && d.attrs.maas !== 'none') out.push('maas');
+    if (d.attrs.microcloud === 'member') out.push('microcloud');
+    return out;
+  }
+  // The device's daily volume split across its snaps (Canonical snaps send less)
+  const snapCache = {};
+  function snapVols(d) {
+    if (snapCache[d.id]) return snapCache[d.id];
+    const list = deviceSnaps(d), w = {};
+    let sum = 0;
+    list.forEach(function (sn) { const v = (TL.valueOf('publisher', sn) || {}).canonical || sn === 'landscape' ? 0.15 : 0.5 + hash(d.id + sn); w[sn] = v; sum += v; });
+    const tot = devVol(d), out = {};
+    list.forEach(function (sn) { out[sn] = tot * w[sn] / sum; });
+    return (snapCache[d.id] = out);
+  }
+  function connSnaps(c) { return !c.snaps || c.snaps === 'all' ? null : c.snaps; }
+  function snapsText(c) { const l = connSnaps(c); return !l ? 'All snaps' : l.length === 1 ? snapLabel(l[0]) : l.length + ' snaps'; }
+  function connVolume(group, snaps) {
+    let v = 0;
+    groupDevices(group).forEach(function (d) { const sv = snapVols(d); Object.keys(sv).forEach(function (sn) { if (!snaps || snaps.indexOf(sn) >= 0) v += sv[sn]; }); });
+    return v;
+  }
+
   // ---- Flows -----------------------------------------------------------
-  // One fact per (source, connector): kept volume to the destination, the rest to "Dropped by shaping".
-  function flows(byDevice) {
+  // One fact per (device, snap, connector): kept volume to the destination, the rest to "Dropped by shaping".
+  // Update traffic with the store comes from snapd on every device.
+  function flows() {
     const facts = [];
     state.connectors.forEach(function (c) {
-      const g = groupById(c.group), p = policyById(c.policy), k = keepOf(p);
+      const g = groupById(c.group), p = policyById(c.policy), k = keepOf(p), only = connSnaps(c);
       groupDevices(g).forEach(function (d) {
-        const src = byDevice ? 'd:' + d.id : 'g:' + c.group;
-        if (c.canonical) { facts.push({ src: src, pol: 'updates', dest: c.dest, count: STORE_VOL, kind: 'canonical', conn: c.id }); return; }
-        const v = devVol(d);
-        facts.push({ src: src, pol: c.policy || 'none', dest: c.dest, count: v * k, kind: 'customer', conn: c.id });
-        if (k < 1) facts.push({ src: src, pol: c.policy || 'none', dest: '__dropped', count: v * (1 - k), kind: 'dropped', conn: c.id });
+        if (c.canonical) { facts.push({ dev: d.id, grp: c.group, pub: '__snapd', pol: 'updates', dest: c.dest, count: STORE_VOL, kind: 'canonical', conn: c.id }); return; }
+        const sv = snapVols(d);
+        Object.keys(sv).forEach(function (sn) {
+          if (only && only.indexOf(sn) < 0) return;
+          const v = sv[sn], base = { dev: d.id, grp: c.group, pub: sn, pol: c.policy || 'none', conn: c.id };
+          facts.push(Object.assign({ dest: c.dest, count: v * k, kind: 'customer' }, base));
+          if (k < 1) facts.push(Object.assign({ dest: '__dropped', count: v * (1 - k), kind: 'dropped' }, base));
+        });
       });
     });
     return facts;
   }
   function totals() {
-    // fleet = data leaving devices: update traffic from every device, plus the snaps' data from devices
-    // in at least one connector's group (devices in no connector send nothing else)
-    const f = flows(false), out = { fleet: 0, delivered: 0, dropped: 0, byDest: {}, byConn: {} };
-    const scoped = {};
-    userConnectors().forEach(function (c) { groupDevices(groupById(c.group)).forEach(function (d) { scoped[d.id] = 1; }); });
-    devices().forEach(function (d) { out.fleet += STORE_VOL + (scoped[d.id] ? devVol(d) : 0); });
+    // fleet = data leaving devices: update traffic from every device, plus each snap's data once
+    // if it is in at least one connector (a device's other snaps send nothing)
+    const f = flows(), out = { fleet: 0, delivered: 0, dropped: 0, byDest: {}, byConn: {} }, seen = {};
+    devices().forEach(function () { out.fleet += STORE_VOL; });
     f.forEach(function (x) {
+      if (x.kind !== 'canonical') { const key = x.dev + '|' + x.pub; if (!seen[key]) { seen[key] = 1; out.fleet += snapVols(ALL_BY_ID[x.dev])[x.pub]; } }
       if (x.kind === 'dropped') out.dropped += x.count; else { out.delivered += x.count; out.byDest[x.dest] = (out.byDest[x.dest] || 0) + x.count; }
       out.byConn[x.conn] = (out.byConn[x.conn] || 0) + (x.kind === 'dropped' ? 0 : x.count);
     });
@@ -718,14 +751,14 @@
   let cdraft = null;
   function pageConnectors(sub) {
     if (sub === 'new') return pageConnectorForm();
-    let html = header('Connectors', 'Connectors', 'A connector sends a group’s data, shaped by a policy, to a destination.', state.connected ? '<a class="p-button p-button--positive" href="#/connectors/new">Create connector</a>' : '');
+    let html = header('Connectors', 'Connectors', 'A connector sends data from a group’s snaps, shaped by a policy, to a destination.', state.connected ? '<a class="p-button p-button--positive" href="#/connectors/new">Create connector</a>' : '');
     html += banner('connector');
     const t = totals();
-    html += '<div class="p-card ob-table-wrap"><table class="ob-table"><thead><tr><th>Name</th><th>Group</th><th>Policy</th><th>Destination</th><th class="num">Volume / day</th><th>Status</th><th>Created by</th></tr></thead><tbody>';
+    html += '<div class="p-card ob-table-wrap"><table class="ob-table"><thead><tr><th>Name</th><th>Group</th><th>Snaps</th><th>Policy</th><th>Destination</th><th class="num">Volume / day</th><th>Status</th><th>Created by</th></tr></thead><tbody>';
     state.connectors.forEach(function (c) {
       const g = groupById(c.group), p = policyById(c.policy), d = destById(c.dest);
       html += '<tr><td>' + (c.canonical ? '<span class="ob-tag" aria-hidden="true"></span>' : '') + esc(c.name) + (c.canonical ? ' <span class="p-badge">Default</span>' : '') + '</td>' +
-        '<td>' + esc(g.name) + ' <span class="ob-muted">(' + n(groupDevices(g).length) + ')</span></td><td>' + (p ? esc(p.name) : '<span class="ob-muted">' + (c.canonical ? 'Update traffic' : 'No shaping') + '</span>') + '</td>' +
+        '<td>' + esc(g.name) + ' <span class="ob-muted">(' + n(groupDevices(g).length) + ')</span></td><td>' + (c.canonical ? '<span class="ob-muted">snapd (updates)</span>' : esc(snapsText(c))) + '</td><td>' + (p ? esc(p.name) : '<span class="ob-muted">' + (c.canonical ? 'Update traffic' : 'No shaping') + '</span>') + '</td>' +
         '<td>' + esc(d.name) + ' <span class="ob-muted">· ' + CLASSES[d.cls] + '</span></td><td class="num">' + (t.byConn[c.id] ? mb(t.byConn[c.id]) : '–') + '</td>' +
         '<td><span class="p-badge p-badge--positive">Active</span></td><td>' + (c.canonical ? '<span class="ob-muted" title="Can be replaced with another store, not removed">🔒 System</span>' : esc(c.by)) + '</td></tr>';
     });
@@ -733,31 +766,51 @@
     return html;
   }
   function pageConnectorForm() {
-    let html = header('Connectors', 'Create connector', 'Choose which devices, how the data is shaped and where it goes.');
+    let html = header('Connectors', 'Create connector', 'Choose which devices and snaps, how the data is shaped and where it goes.');
     html += banner('connector');
     if (!state.connected) return html + emptyNoDevices();
     if (!cdraft) {
       const ug = userGroups(), lastDest = state.destinations.filter(function (d) { return !d.canonical; }).slice(-1)[0];
-      cdraft = { name: '', group: (ug.slice(-1)[0] || groupById('all')).id, policy: state.policies.length ? state.policies.slice(-1)[0].id : '', dest: lastDest ? lastDest.id : '__new',
+      cdraft = { name: '', snapsMode: 'all', snaps: [], group: (ug.slice(-1)[0] || groupById('all')).id, policy: state.policies.length ? state.policies.slice(-1)[0].id : '', dest: lastDest ? lastDest.id : '__new',
         nd: { type: 'Datadog', name: '', endpoint: '', cls: 'external', region: 'EU' } };
     }
     html += '<div class="ob-form-layout"><form class="p-card ob-form" id="conn-form" novalidate>' +
       '<label class="ob-label" for="c-name">Name</label><input class="ob-input" id="c-name" value="' + esc(cdraft.name) + '" placeholder="For example: Large servers to Datadog" autocomplete="off"><p class="ob-error" id="c-name-err" hidden>Give the connector a name.</p>' +
       '<h2 class="ob-section">1. Which devices</h2><select class="p-select" id="c-group" aria-label="Group">' + state.groups.map(function (g) { return '<option value="' + g.id + '"' + (g.id === cdraft.group ? ' selected' : '') + '>' + esc(g.name) + ' (' + n(groupDevices(g).length) + ')</option>'; }).join('') + '</select> <a class="p-link" href="#/groups/new">Create a group</a>' +
-      '<h2 class="ob-section">2. How the data is shaped</h2><select class="p-select" id="c-policy" aria-label="Policy"><option value="">No shaping (send unchanged)</option>' + state.policies.map(function (p) { return '<option value="' + p.id + '"' + (p.id === cdraft.policy ? ' selected' : '') + '>' + esc(p.name) + '</option>'; }).join('') + '</select> <a class="p-link" href="#/policies/new">Create a policy</a>' +
-      '<h2 class="ob-section">3. Where it goes</h2><select class="p-select" id="c-dest" aria-label="Destination">' + state.destinations.filter(function (d) { return !d.canonical; }).map(function (d) { return '<option value="' + d.id + '"' + (d.id === cdraft.dest ? ' selected' : '') + '>' + esc(d.name) + '</option>'; }).join('') + '<option value="__new"' + (cdraft.dest === '__new' ? ' selected' : '') + '>New destination…</option></select>' +
+      '<h2 class="ob-section">2. Which snaps</h2><div id="c-snaps">' + snapPicker() + '</div>' +
+      '<h2 class="ob-section">3. How the data is shaped</h2><select class="p-select" id="c-policy" aria-label="Policy"><option value="">No shaping (send unchanged)</option>' + state.policies.map(function (p) { return '<option value="' + p.id + '"' + (p.id === cdraft.policy ? ' selected' : '') + '>' + esc(p.name) + '</option>'; }).join('') + '</select> <a class="p-link" href="#/policies/new">Create a policy</a>' +
+      '<h2 class="ob-section">4. Where it goes</h2><select class="p-select" id="c-dest" aria-label="Destination">' + state.destinations.filter(function (d) { return !d.canonical; }).map(function (d) { return '<option value="' + d.id + '"' + (d.id === cdraft.dest ? ' selected' : '') + '>' + esc(d.name) + '</option>'; }).join('') + '<option value="__new"' + (cdraft.dest === '__new' ? ' selected' : '') + '>New destination…</option></select>' +
       '<div id="c-newdest" class="ob-subform"' + (cdraft.dest === '__new' ? '' : ' hidden') + '>' + destFields(cdraft.nd, 'nd-') + '</div>' +
       '<div class="ob-form__actions"><a class="p-button" href="#/connectors">Cancel</a><button type="submit" class="p-button p-button--positive">Activate connector</button></div>' +
       '</form><aside class="p-card ob-preview" id="c-preview" aria-live="polite">' + connPreview() + '</aside></div>';
     return html;
   }
+  // Snaps on the chosen group's devices, with how many devices run each
+  function groupSnaps(g) {
+    const count = {};
+    groupDevices(g).forEach(function (d) { deviceSnaps(d).forEach(function (sn) { count[sn] = (count[sn] || 0) + 1; }); });
+    return Object.keys(count).sort(function (a, b) { return count[b] - count[a]; }).map(function (sn) { return { id: sn, label: snapLabel(sn), n: count[sn], canonical: !!(TL.valueOf('publisher', sn) || {}).canonical || sn === 'landscape' }; });
+  }
+  function snapPicker() {
+    const list = groupSnaps(groupById(cdraft.group));
+    let html = '<label class="ob-radio"><input type="radio" name="c-snapsmode" value="all"' + (cdraft.snapsMode === 'all' ? ' checked' : '') + '> All snaps, including ones installed later</label>' +
+      '<label class="ob-radio"><input type="radio" name="c-snapsmode" value="some"' + (cdraft.snapsMode === 'some' ? ' checked' : '') + '> Only these snaps</label>';
+    if (cdraft.snapsMode === 'some') {
+      html += '<fieldset class="ob-snaps"><legend class="ob-label">Snaps on devices in this group</legend>' + list.map(function (sn) {
+        return '<label class="ob-check"><input type="checkbox" name="c-snap" value="' + esc(sn.id) + '"' + (cdraft.snaps.indexOf(sn.id) >= 0 ? ' checked' : '') + '> ' + esc(sn.label) + ' <span class="ob-muted">' + (sn.canonical ? 'Canonical · ' : '') + n(sn.n) + ' device' + (sn.n === 1 ? '' : 's') + '</span></label>';
+      }).join('') + '</fieldset><p class="ob-error" id="c-snaps-err" hidden>Choose at least one snap.</p>';
+    }
+    return html;
+  }
   function connPreview() {
     const g = groupById(cdraft.group), p = policyById(cdraft.policy);
-    const list = groupDevices(g), vol = list.reduce(function (s, d) { return s + devVol(d); }, 0), k = keepOf(p);
+    const only = cdraft.snapsMode === 'some' ? cdraft.snaps : null;
+    const list = groupDevices(g), vol = connVolume(g, only), k = keepOf(p);
     const d = cdraft.dest === '__new' ? cdraft.nd : destById(cdraft.dest);
     const dname = d && d.name ? d.name : 'this destination';
     let html = '<h2 class="ob-preview__title">What will leave</h2>' +
       '<dl class="ob-dl"><dt>Devices now</dt><dd>' + n(list.length) + '</dd>' +
+      '<dt>Snaps</dt><dd>' + (only ? (only.length ? only.map(snapLabel).map(esc).join(', ') : 'None chosen yet') : 'All, including snaps installed later') + '</dd>' +
       '<dt>Later</dt><dd>' + (g.kind === 'dynamic' ? 'Any device that joins “' + esc(g.name) + '” is added automatically' : 'Only these devices (static group)') + '</dd>' +
       '<dt>Volume / day</dt><dd>' + mb(vol) + (k < 1 ? ' → <strong>' + mb(vol * k) + '</strong> after ' + esc(p.name) : ' unchanged') + '</dd>' +
       '<dt>Receiver</dt><dd>' + esc(dname) + (d && d.cls ? ' · ' + CLASSES[d.cls] : '') + (d && d.region ? ' · ' + esc(d.region) : '') + '</dd></dl>';
@@ -771,15 +824,16 @@
   function activateConnector() {
     const name = cdraft.name.trim();
     if (!name) { $('c-name-err').hidden = false; $('c-name').focus(); return; }
+    if (cdraft.snapsMode === 'some' && !cdraft.snaps.length) { $('c-snaps-err').hidden = false; return; }
     let dest = destById(cdraft.dest);
     if (cdraft.dest === '__new') {
       readDest('nd-', cdraft.nd);
       if (!cdraft.nd.name.trim()) { $('nd-name-err').hidden = false; $('nd-name').focus(); return; }
       dest = newDest(cdraft.nd);
     }
-    const c = { id: uid('c'), name: name, group: cdraft.group, policy: cdraft.policy || null, dest: dest.id, by: ME, at: now() };
+    const c = { id: uid('c'), name: name, group: cdraft.group, snaps: cdraft.snapsMode === 'some' ? cdraft.snaps.slice() : 'all', policy: cdraft.policy || null, dest: dest.id, by: ME, at: now() };
     state.connectors.push(c);
-    log('activated connector <strong>' + esc(name) + '</strong> (' + esc(groupById(c.group).name) + ' → ' + esc(dest.name) + ', ' + CLASSES[dest.cls] + ')');
+    log('activated connector <strong>' + esc(name) + '</strong> (' + esc(groupById(c.group).name) + ', ' + esc(snapsText(c)).toLowerCase() + ' → ' + esc(dest.name) + ', ' + CLASSES[dest.cls] + ')');
     const first = !state.firstConnector;
     if (first) state.firstConnector = c.id;
     cdraft = null; save();
@@ -791,7 +845,7 @@
   // ---- Data flow -------------------------------------------------------
   let flowFocus = null;
   function pageFlow() {
-    let html = header('Data flow', 'Data flow', 'How data moves from your devices, through policies, to each destination.');
+    let html = header('Data flow', 'Data flow', 'How data moves from each device’s snaps, through policies, to each destination.');
     if (!state.connected) return html + emptyNoDevices();
     const first = /first=1/.test(location.hash) && state.firstConnector;
     if (first) html += '<div class="ob-banner ob-banner--success" role="status"><span class="ob-banner__step">Done</span><p class="ob-banner__text"><strong>Your first data is on its way.</strong> The highlighted path is the connector you just created. The orange path is update traffic to the Canonical Snap Store.</p><div class="ob-banner__actions"><a class="p-button p-button--small p-button--positive" href="#/overview">Go to Overview</a></div></div>';
@@ -801,35 +855,62 @@
       '<div class="p-kpi"><div class="p-kpi__label">Delivered / day</div><div class="p-kpi__value">' + mb(t.delivered) + '</div><div class="p-kpi__sub">Can be higher than data leaving devices when a device sends to several destinations</div></div>' +
       '<div class="p-kpi"><div class="p-kpi__label">Dropped by shaping / day</div><div class="p-kpi__value">' + mb(t.dropped) + '</div></div></div>';
     if (list.length) html += '<details class="p-card ob-flowinsights"><summary>' + list.length + ' insight' + (list.length > 1 ? 's' : '') + ' available</summary><ul class="ob-list">' + list.map(function (i) { return '<li class="ob-insight"><span class="p-badge">' + i.who + '</span><div><strong>' + esc(i.title) + '</strong><p>' + i.body + '</p></div></li>'; }).join('') + '</ul></details>';
+    html += '<div class="p-toolbar ob-flowbar"><div class="p-field"><label class="p-field__label" for="flow-groupby">Group by</label><select id="flow-groupby" class="p-select">' +
+      '<option value="none"' + (flowGroupBy === 'none' ? ' selected' : '') + '>None (each device)</option><option value="group"' + (flowGroupBy === 'group' ? ' selected' : '') + '>Group</option></select></div></div>' +
+      '<p class="ob-ladder" id="flow-ladder" hidden></p>';
     html += '<div class="p-card insights__chart"><div class="chart-wrap"><div class="ob-legend" id="flow-legend"></div><svg id="flow-svg" class="sankey" role="img" aria-label="Sankey diagram of data flow"></svg></div>' +
       '<div class="ob-key"><span><i class="ob-key__sw" style="background:#E95420"></i>Canonical update traffic</span><span><i class="ob-key__sw" style="background:#4C6E87"></i>Your data</span><span><i class="ob-key__sw" style="background:#B8B8B8"></i>Dropped by shaping</span></div></div>' +
       '<p class="ob-hint"><a class="p-link" href="insights/index.html?fleet=' + (SCEN.fleet === 'zero' ? 'mid' : SCEN.fleet) + '">Open the full Insights prototype</a> to see Data flow for a mature setup (demo data: views, group-by, comments and timeline).</p>';
     if (state.firstConnector && !state.flowSeen) { state.flowSeen = true; save(); }
     return html;
   }
+  // Column 1 is every device by default. Like the Insights prototype: up to 15 devices are all shown,
+  // 16 to 30 get a nudge to group, and above 30 the top 20 by volume are shown plus "Others".
+  let flowGroupBy = 'none';
   function drawFlow() {
     const svg = $('flow-svg'); if (!svg) return;
-    const byDevice = devices().length <= 15;
-    const facts = flows(byDevice);
+    const facts = flows();
     const first = /first=1/.test(location.hash) ? state.firstConnector : null;
-    const srcVals = {}, polVals = {}, destVals = {};
-    facts.forEach(function (f) {
-      srcVals[f.src] = 1; polVals[f.pol] = 1; destVals[f.dest] = 1;
-    });
-    function dim(label, ids, lab) { const values = ids.map(function (id) { return { id: id, label: lab(id) }; }); const index = {}; values.forEach(function (v, i) { index[v.id] = i; }); return { label: label, values: values, index: index }; }
-    TL.DIMENSIONS.ob_src = dim(byDevice ? 'Device' : 'Group', Object.keys(srcVals), function (id) { return id.slice(2) && (id[0] === 'd' ? id.slice(2) : groupById(id.slice(2)).name); });
-    TL.DIMENSIONS.ob_pol = dim('Policy', Object.keys(polVals).sort(function (a, b) { const r = function (x) { return x === 'updates' ? 2 : x === 'none' ? 1 : 0; }; return r(a) - r(b); }), function (id) { return id === 'updates' ? 'Update traffic' : id === 'none' ? 'No shaping' : policyById(id).name; });
-    TL.DIMENSIONS.ob_dest = dim('Destination', Object.keys(destVals).sort(function (a) { return a === '__dropped' ? 1 : a === 'store' ? 0 : -1; }), function (id) { return id === '__dropped' ? 'Dropped by shaping' : destById(id).name; });
-    const tot = facts.reduce(function (s, f) { return s + f.count; }, 0), gb = tot > 5000;
-    const mapped = facts.map(function (f) { return { ob_src: f.src, ob_pol: f.pol, ob_dest: f.dest, count: gb ? f.count / 1000 : f.count, kind: f.kind, conn: f.conn }; });
-    const stages = ['ob_src', 'ob_pol', 'ob_dest'];
+    const grouped = flowGroupBy === 'group';
+    // rank devices by volume for the top 20
+    // rank by data from snaps first (what connectors send), then by update traffic
+    const devTot = {}, devCust = {};
+    facts.forEach(function (f) { devTot[f.dev] = (devTot[f.dev] || 0) + f.count; if (f.kind !== 'canonical') devCust[f.dev] = (devCust[f.dev] || 0) + f.count; });
+    const ranked = Object.keys(devTot).sort(function (a, b) { return (devCust[b] || 0) - (devCust[a] || 0) || devTot[b] - devTot[a]; });
+    const top = ranked.length > 30 ? ranked.slice(0, 20) : ranked, inTop = {};
+    top.forEach(function (id) { inTop[id] = 1; });
+    const others = ranked.length - top.length;
+    const srcOf = function (f) { return grouped ? 'g:' + f.grp : inTop[f.dev] ? 'd:' + f.dev : '__others'; };
+    const ids = { src: [], pub: [], pol: [], dest: [] }, seen = { src: {}, pub: {}, pol: {}, dest: {} };
+    const add = function (k, v) { if (!seen[k][v]) { seen[k][v] = 1; ids[k].push(v); } };
+    if (!grouped) top.forEach(function (id) { add('src', 'd:' + id); });
+    facts.forEach(function (f) { add('src', srcOf(f)); add('pub', f.pub); add('pol', f.pol); add('dest', f.dest); });
+    const rank = function (x, last) { return last.indexOf(x) >= 0 ? 1 + last.indexOf(x) : 0; };
+    ids.pub.sort(function (a, b) { return rank(a, ['__snapd']) - rank(b, ['__snapd']) || snapLabel(a).localeCompare(snapLabel(b)); });
+    ids.pol.sort(function (a, b) { return rank(a, ['none', 'updates']) - rank(b, ['none', 'updates']); });
+    ids.dest.sort(function (a, b) { return rank(a, ['store', '__dropped']) - rank(b, ['store', '__dropped']); });
+    function dim(label, list, lab) { const values = list.map(function (id) { return { id: id, label: lab(id) }; }); const index = {}; values.forEach(function (v, i) { index[v.id] = i; }); return { label: label, values: values, index: index }; }
+    TL.DIMENSIONS.ob_src = dim(grouped ? 'Group' : 'Device', ids.src, function (id) { return id === '__others' ? 'Others (' + n(others) + ' devices)' : id[0] === 'd' ? id.slice(2) : groupById(id.slice(2)).name; });
+    TL.DIMENSIONS.ob_pub = dim('Publisher (snap)', ids.pub, function (id) { return id === '__snapd' ? 'snapd (updates)' : snapLabel(id); });
+    TL.DIMENSIONS.ob_pol = dim('Policy', ids.pol, function (id) { return id === 'updates' ? 'Update traffic' : id === 'none' ? 'No shaping' : policyById(id).name; });
+    TL.DIMENSIONS.ob_dest = dim('Destination', ids.dest, function (id) { return id === '__dropped' ? 'Dropped by shaping' : destById(id).name; });
+    const tot = facts.reduce(function (sum, f) { return sum + f.count; }, 0), gb = tot > 5000;
+    const mapped = facts.map(function (f) { return { ob_src: srcOf(f), ob_pub: f.pub, ob_pol: f.pol, ob_dest: f.dest, count: gb ? f.count / 1000 : f.count, kind: f.kind, conn: f.conn }; });
+    const stages = ['ob_src', 'ob_pub', 'ob_pol', 'ob_dest'];
     const focus = first ? function (f) { return f.conn === first || f.kind === 'canonical'; } : flowFocus ? function (f) { return f[flowFocus.dim] === flowFocus.val; } : null;
     const agg = S.aggregate(mapped, stages, { segAttr: 'kind', focus: focus });
-    const width = Math.max(720, svg.parentNode.clientWidth - 8);
-    const L = S.layout(agg, stages, width, Math.max(260, Math.min(640, 40 + TL.DIMENSIONS.ob_src.values.length * 26)), { marginRight: 200 });
+    const width = Math.max(900, svg.parentNode.clientWidth - 8);
+    const rows = Math.max(ids.src.length, ids.pub.length);
+    const L = S.layout(agg, stages, width, Math.max(280, Math.min(760, 40 + rows * 28)), { marginRight: 200, minNode0: grouped ? 1 : 6 });
     S.render(svg, L, { palette: [{ id: 'canonical', color: '#E95420' }, { id: 'customer', color: '#4C6E87' }, { id: 'dropped', color: '#B8B8B8' }], focusId: focus ? 'x' : null, unit: gb ? ' GB/day' : ' MB/day' });
-    const cols = stages.map(function (s, i) { const node = L.nodes.filter(function (x) { return x.col === i; })[0]; return node ? '<span style="left:' + node.x + 'px">' + TL.DIMENSIONS[s].label + '</span>' : ''; });
+    const cols = stages.map(function (st, i) { const node = L.nodes.filter(function (x) { return x.col === i; })[0]; return node ? '<span style="left:' + node.x + 'px">' + TL.DIMENSIONS[st].label + '</span>' : ''; });
     $('flow-legend').innerHTML = cols.join('');
+    const note = $('flow-ladder');
+    if (note) {
+      note.hidden = grouped || ranked.length <= 15;
+      note.innerHTML = ranked.length > 30 ? 'Showing the 20 devices sending the most. The other ' + n(others) + ' are in Others. <button type="button" class="p-link" data-act="flow-group">Group by group</button>'
+        : 'As your fleet grows, group devices to keep this view readable. <button type="button" class="p-link" data-act="flow-group">Group by group</button>';
+    }
     svg.querySelectorAll('.sk-node').forEach(function (g) {
       g.addEventListener('click', function () {
         const id = g.getAttribute('data-node'), i = id.indexOf(':');
@@ -864,7 +945,7 @@
     else if (step === 'connector' && !userConnectors().length) {
       state.destinations.push({ id: 'd-datadog', name: 'Datadog EU', type: 'Datadog', cls: 'external', region: 'EU', endpoint: '', by: ME, at: now() });
       const g = userGroups()[0] || groupById('all');
-      state.connectors.push({ id: 'c-first', name: g.name + ' to Datadog', group: g.id, policy: state.policies[0].id, dest: 'd-datadog', by: ME, at: now() });
+      state.connectors.push({ id: 'c-first', name: g.name + ' to Datadog', group: g.id, snaps: 'all', policy: state.policies[0].id, dest: 'd-datadog', by: ME, at: now() });
       state.firstConnector = 'c-first';
       log('activated connector <strong>' + esc(g.name) + ' to Datadog</strong> (' + esc(g.name) + ' → Datadog EU, External)');
     } else if (step === 'flow') state.flowSeen = true;
@@ -981,6 +1062,7 @@
       pdraft = { id: 'new', template: t.id, name: t.id === 'custom' ? '' : t.name, purpose: t.purpose, rules: Object.assign({}, t.rules) }; render();
     }
     else if (act === 'tpl-back') { pdraft.template = null; render(); }
+    else if (act === 'flow-group') { flowGroupBy = 'group'; $('flow-groupby').value = 'group'; drawFlow(); }
   });
   main.addEventListener('change', function (e) {
     const el = e.target;
@@ -995,11 +1077,19 @@
       if (k === 'attr') { const a = QA[el.value]; row.op = a.numeric ? 'gte' : 'is'; row.val = a.numeric ? '32' : a.values[0].id; $('q-rows').innerHTML = queryRows(); }
       $('g-preview').innerHTML = groupPreview();
     } else if (el.name === 'kind') { gdraft.kind = el.value; main.querySelectorAll('.ob-radio-card').forEach(function (c) { c.classList.toggle('is-on', c.querySelector('input').checked); }); $('g-preview').innerHTML = groupPreview(); }
+    else if (el.id === 'flow-groupby') { flowGroupBy = el.value; drawFlow(); }
     else if (el.id === 'p-purpose') pdraft.purpose = el.value;
     else if (el.id && /^p-(dropDebug|metricsOnly|redact)$/.test(el.id)) { pdraft.rules[el.id.slice(2)] = el.checked; $('p-preview').innerHTML = policyPreview(); }
     else if (el.id === 'c-group' || el.id === 'c-policy' || el.id === 'c-dest') {
       cdraft[el.id.slice(2)] = el.value;
       if (el.id === 'c-dest') $('c-newdest').hidden = el.value !== '__new';
+      if (el.id === 'c-group') { const avail = groupSnaps(groupById(el.value)).map(function (x) { return x.id; }); cdraft.snaps = cdraft.snaps.filter(function (x) { return avail.indexOf(x) >= 0; }); $('c-snaps').innerHTML = snapPicker(); }
+      $('c-preview').innerHTML = connPreview();
+    } else if (el.name === 'c-snapsmode') { cdraft.snapsMode = el.value; $('c-snaps').innerHTML = snapPicker(); $('c-preview').innerHTML = connPreview(); }
+    else if (el.name === 'c-snap') {
+      const i = cdraft.snaps.indexOf(el.value);
+      if (el.checked && i < 0) cdraft.snaps.push(el.value); else if (!el.checked && i >= 0) cdraft.snaps.splice(i, 1);
+      const err = $('c-snaps-err'); if (err) err.hidden = true;
       $('c-preview').innerHTML = connPreview();
     } else if (cdraft && /^nd-/.test(el.id || el.name || '')) { readDest('nd-', cdraft.nd); $('c-preview').innerHTML = connPreview(); }
   });

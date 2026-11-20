@@ -40,13 +40,13 @@ Overview (home) · Groups · Policies · Connectors · Destinations · Data flow
 - A connected device sends nothing except **update traffic** with the Canonical Snap Store. This is the one default connector (scope: All devices). It can be replaced with your own store but not removed.
 - A **group** is a query, for example RAM at least 32 GB. It is saved as **dynamic** (these devices and any that match later) or **static** (exactly these devices, never dropped). A group sends nothing on its own. Groups are shared with Landscape.
 - A **policy** shapes data: sampling, dropping debug logs, keeping metrics only, redacting personal data. It has a purpose (analytic, debug, regulatory) and a preview of the data before and after.
-- A **connector** joins a group, a policy and a destination. This is where data leaves, so this is where the preview is. A device in several connectors' groups sends each packet to every destination.
+- A **connector** joins a group, its snaps (all snaps, including ones installed later, or only chosen snaps), a policy and a destination. This is where data leaves, so this is where the preview is. A device in several connectors' groups sends each packet to every destination.
 - A **destination** has a receiver classification (internal, subsidiary, partner, external) and a region. The Destinations page is the audit view: share of data leaving devices, connectors, devices in scope and health.
 - **No approvals in the MVP.** A connector is live as soon as it is created. Other admins are notified, and every change is logged in Recent changes.
 
 ## Data flow
 
-Data flow is drawn from the onboarding state with the Insights prototype's `sankey.js`: group (or device, for 15 devices or fewer) → policy → destination. Widths are volume. Update traffic is orange, your data is blue-grey, and data dropped by shaping is grey. After the first connector, its path is highlighted. Click a node to trace its path.
+Data flow is drawn from the onboarding state with the Insights prototype's `sankey.js`, with the same columns: device → publisher (snap) → policy → destination. It starts ungrouped, one node per device, following the Insights ladder (up to 15 devices all shown, 16 to 30 a nudge to group, above 30 the top 20 plus Others). **Group by › Group** collapses column 1 to the connector groups. Update traffic comes from snapd on every device. Widths are volume. Update traffic is orange, your data is blue-grey, and data dropped by shaping is grey. After the first connector, its path is highlighted. Click a node to trace its path.
 
 `insights/` is a copy of the full Insights prototype (demo data) with this app's menu, linked from Data flow.
 

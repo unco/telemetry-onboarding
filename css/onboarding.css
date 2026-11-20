@@ -199,3 +199,8 @@ body.jig-open .ob-jig { transform: none; }
 .ob-jig__hint { font-size: .8125rem; color: var(--muted); margin: 6px 0 0; }
 .ob-jig__foot { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 12px; }
 @media (max-width: 760px) { .ob-jig { width: 100vw; } body.jig-open .ob-jig-tab { display: none; } }
+
+.ob-flowbar { margin-bottom: 8px; }
+.ob-ladder { background: var(--bg-soft); padding: 8px 12px; margin: 0 0 12px; font-size: .9375rem; }
+.ob-snaps { border: 0; padding: 0; margin: 8px 0 0 24px; display: grid; gap: 2px; }
+.ob-snaps .ob-muted { font-size: .8125rem; margin-left: 4px; }
