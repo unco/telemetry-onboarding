@@ -899,6 +899,18 @@
     const stages = ['ob_src', 'ob_pub', 'ob_pol', 'ob_dest'];
     const focus = first ? function (f) { return f.conn === first || f.kind === 'canonical'; } : flowFocus ? function (f) { return f[flowFocus.dim] === flowFocus.val; } : null;
     const agg = S.aggregate(mapped, stages, { segAttr: 'kind', focus: focus });
+    // One band per kind: a link carrying your data and dropped data becomes two bands,
+    // so every node's bar reads update traffic, then your data, then dropped, on both sides.
+    const split = {};
+    Object.keys(agg.links).forEach(function (key) {
+      const l = agg.links[key];
+      Object.keys(l.seg).forEach(function (kind) {
+        const v = l.seg[kind]; if (v <= 1e-9) return;
+        const seg = {}, segF = {}; seg[kind] = v; if (l.segF[kind]) segF[kind] = l.segF[kind];
+        split[key + '#' + kind] = Object.assign({}, l, { key: key + '#' + kind, value: v, b: l.b * v / l.value, f: l.segF[kind] || 0, seg: seg, segF: segF });
+      });
+    });
+    agg.links = split;
     const width = Math.max(900, svg.parentNode.clientWidth - 8);
     const rows = Math.max(ids.src.length, ids.pub.length);
     const L = S.layout(agg, stages, width, Math.max(280, Math.min(760, 40 + rows * 28)), { marginRight: 200, minNode0: grouped ? 1 : 6 });
