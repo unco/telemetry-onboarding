@@ -92,7 +92,8 @@
     const pads = cols.map(function (c) { return c.length > 14 ? 4 : c.length > 8 ? 10 : 16; });
     let ky = Infinity;
     cols.forEach(function (c, i) {
-      const sum = c.reduce(function (s, n) { return s + n.value; }, 0);
+      // o.scaleTo: scale as if each column held this much, so a quieter period draws shorter (fixed scale over a timeline)
+      const sum = Math.max(c.reduce(function (s, n) { return s + n.value; }, 0), o.scaleTo || 0);
       if (sum > 0) ky = Math.min(ky, (innerH - pads[i] * (c.length - 1)) / sum);
     });
     if (!isFinite(ky)) ky = 0;

@@ -261,14 +261,35 @@
   const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   function dayLabel(back, short) { const d = dayDate(back); return short ? d.getDate() + ' ' + MON[d.getMonth()] : DAYS[d.getDay()] + ' ' + d.getDate() + ' ' + MON[d.getMonth()] + ' ' + d.getFullYear(); }
   function periodLabel(p) { return p.day == null ? 'Daily average, ' + TL.monthLabel(TL.MONTHS[p.m]) : dayLabel(p.day); }
-  function volFactor(dev, p) { return monthFactor(dev, p.m) * (p.day == null ? 1 : 0.85 + 0.3 * hash(dev + 'day' + p.day)); }
+  // Rhythm by site so the timeline visibly moves: factories close at weekends and in August, shops peak
+  // on Saturdays, distribution slows at weekends, data centres run Monday batches, home labs are busiest at weekends.
+  //                     Sun   Mon   Tue   Wed   Thu   Fri   Sat
+  const WEEK = { factory: [0.12, 1.05, 1.0, 1.0, 1.0, 0.95, 0.18], store: [0.8, 0.85, 0.9, 0.95, 1.0, 1.25, 1.45],
+    dc: [0.3, 1.15, 1.0, 1.0, 1.0, 1.0, 0.55], datacentre: [0.85, 1.25, 1.0, 1.0, 1.0, 0.95, 0.85],
+    cloud: [0.7, 1.0, 1.0, 1.0, 1.0, 1.0, 0.7], home: [1.5, 0.8, 0.8, 0.8, 0.8, 0.9, 1.5] };
+  const WEEK_DEFAULT = [0.7, 1.0, 1.0, 1.0, 1.0, 1.0, 0.7];
+  // Month factors on top of the Insights data (index relative to the last month: -2, -1, 0)
+  const SEASON = { factory: [0.45, 1.0, 1.0], store: [0.8, 0.9, 1.0] };
+  function volFactor(dev, p) {
+    const site = ALL_BY_ID[dev].attrs.site;
+    let f = monthFactor(dev, p.m);
+    const season = SEASON[site]; if (season && p.m >= LAST_MONTH - 2) f *= season[p.m - (LAST_MONTH - 2)];
+    if (p.day != null) {
+      f *= (WEEK[site] || WEEK_DEFAULT)[dayDate(p.day).getDay()] * (0.9 + 0.2 * hash(dev + 'day' + p.day));
+      // one device left debug logging on for a day
+      if (p.day === 3 && hash(dev + 'spike') < 0.08) f *= 3;
+    }
+    return f;
+  }
+  // Update traffic: steady, with a peak on Tuesdays when most refreshes land
+  function storeFactor(p) { return p.day == null ? 1 : dayDate(p.day).getDay() === 2 ? 1.9 : 1; }
   function flows(pp) {
     const pd = pp || curPeriod(), m = pd.m;
     const facts = [];
     state.connectors.forEach(function (c) {
       const g = groupById(c.group), p = policyById(c.policy), k = keepOf(p), only = connSnaps(c);
       groupDevices(g).forEach(function (d) {
-        if (c.canonical) { facts.push({ dev: d.id, grp: c.group, pub: '__snapd', pol: 'updates', dest: c.dest, count: STORE_VOL, kind: 'canonical', conn: c.id }); return; }
+        if (c.canonical) { facts.push({ dev: d.id, grp: c.group, pub: '__snapd', pol: 'updates', dest: c.dest, count: STORE_VOL * storeFactor(pd), kind: 'canonical', conn: c.id }); return; }
         const sv = snapVols(d), mf = volFactor(d.id, pd);
         Object.keys(sv).forEach(function (sn) {
           if (only && only.indexOf(sn) < 0) return;
@@ -285,7 +306,7 @@
     // fleet = data leaving devices: update traffic from every device, plus each snap's data once
     // if it is in at least one connector (a device's other snaps send nothing)
     const f = flows(pd), out = { fleet: 0, delivered: 0, dropped: 0, byDest: {}, byConn: {} }, seen = {};
-    devices().forEach(function () { out.fleet += STORE_VOL; });
+    devices().forEach(function () { out.fleet += STORE_VOL * storeFactor(pd); });
     f.forEach(function (x) {
       if (x.kind !== 'canonical') { const key = x.dev + '|' + x.pub; if (!seen[key]) { seen[key] = 1; out.fleet += snapVols(ALL_BY_ID[x.dev])[x.pub] * volFactor(x.dev, pd); } }
       if (x.kind === 'dropped') out.dropped += x.count; else { out.delivered += x.count; out.byDest[x.dest] = (out.byDest[x.dest] || 0) + x.count; }
@@ -921,6 +942,18 @@
       '<div class="p-timeline__track"><input type="range" class="p-timeline__range" id="tl-range" min="0" max="' + last + '" step="1" value="' + flowIdx + '" aria-label="' + (unit === 'day' ? 'Day' : 'Month') + '">' +
       '<div class="p-timeline__ticks">' + ticks + '</div></div></div>';
   }
+  // Largest total in the current range, so the timeline uses one scale and quiet days draw visibly smaller
+  const rangeMaxCache = {};
+  function rangeMax() {
+    const r = curRange(); if (!r) return 0;
+    const key = [SCEN.fleet, r.id, state.age, JSON.stringify(state.connectors), JSON.stringify(state.policies), JSON.stringify(state.groups)].join('|');
+    if (rangeMaxCache[key] == null) {
+      let mx = 0;
+      for (let i = 0; i < r.n; i++) mx = Math.max(mx, flows(periodAt(r, i)).reduce(function (sum, f) { return sum + f.count; }, 0));
+      rangeMaxCache[key] = mx;
+    }
+    return rangeMaxCache[key];
+  }
   function stopPlay() { if (playT) { clearInterval(playT); playT = null; } }
   function applyInsight(id) {
     const i = insightsList().filter(function (x) { return x.id === id; })[0];
@@ -947,7 +980,7 @@
     html += '<div class="p-toolbar ob-flowbar">' +
       (state.age >= 7 ? '<div class="p-field"><label class="p-field__label" for="flow-range">Range</label><select id="flow-range" class="p-select">' + opt(rangesAvailable(), flowRange) + '</select></div>' : '') +
       '<div class="p-field"><label class="p-field__label" for="flow-view">View</label><select id="flow-view" class="p-select">' + viewOptions() + '</select></div>' +
-      '<div class="p-field"><label class="p-field__label" for="flow-devgroup">Group devices by</label><select id="flow-devgroup" class="p-select">' + opt(DEV_GROUPS, devGroupBy) + '</select></div>' +
+      '<div class="p-field"><label class="p-field__label" for="flow-devgroup">Group devices by</label><select id="flow-devgroup" class="p-select">' + devGroupOptions() + '</select></div>' +
       '<div class="p-field"><label class="p-field__label" for="flow-destgroup">Group destinations by</label><select id="flow-destgroup" class="p-select">' + opt(DEST_GROUPS, destGroupBy) + '</select></div></div>' +
       '<p class="ob-question" id="flow-question">' + esc(currentView().question) + '</p>' +
       '<p class="ob-ladder" id="flow-ladder" hidden></p>';
@@ -960,7 +993,16 @@
   // Column 1 is every device by default. Like the Insights prototype: up to 15 devices are all shown,
   // 16 to 30 get a nudge to group, and above 30 the top 20 by volume are shown plus "Others".
   // Both ends of the Sankey can be grouped. Flows are monochrome; click a node to trace its path.
-  const DEV_GROUPS = [{ id: 'none', label: 'None (each device)' }, { id: 'group', label: 'Group' }, { id: 'site', label: 'Site' }, { id: 'region', label: 'Region' }, { id: 'type', label: 'Device type' }, { id: 'release', label: 'Ubuntu release' }];
+  // Group devices by: the Insights menu (Manual · Reported · Infrastructure), plus Group (this app's saved groups)
+  const HOBBY_GROUP_HIDDEN = ['site', 'region', 'environment', 'sovereignty', 'confidential', 'jaas', 'maas'];
+  function devGroupLabel(id) { return id === 'none' ? 'None (each device)' : id === 'group' ? 'Group' : TL.GROUP_BY_LABELS[id] || (TL.ATTRIBUTES[id] || {}).label || id; }
+  function devGroupOptions() {
+    const o = function (id) { return '<option value="' + id + '"' + (id === devGroupBy ? ' selected' : '') + '>' + esc(devGroupLabel(id)) + '</option>'; };
+    return o('none') + '<optgroup label="Saved">' + o('group') + '</optgroup>' + TL.GROUP_BY_MENU.filter(function (e) { return e.group; }).map(function (e) {
+      const items = e.items.filter(function (k) { return !(SCEN.fleet === 'hobby' && HOBBY_GROUP_HIDDEN.indexOf(k) >= 0); });
+      return items.length ? '<optgroup label="' + esc(e.group) + '">' + items.map(o).join('') + '</optgroup>' : '';
+    }).join('');
+  }
   const DEST_GROUPS = [{ id: 'none', label: 'None (each destination)' }, { id: 'cls', label: 'Receiver' }, { id: 'type', label: 'Type' }, { id: 'region', label: 'Region' }];
   let devGroupBy = 'none', destGroupBy = 'none';
   // View, as in Insights: starts on Neutral (monochrome). Another view colours each device, and its flows
@@ -1006,7 +1048,7 @@
     const others = ranked.length - top.length;
     const srcOf = function (f) {
       if (devGroupBy === 'group') return 'g:' + f.grp;
-      if (grouped) { const v = ALL_BY_ID[f.dev].attrs[devGroupBy]; return 'a:' + (v == null ? 'none' : v); }
+      if (grouped) { const v = attrsAt(f.dev, curMonth())[devGroupBy]; return 'a:' + (v == null ? 'none' : v); }
       return inTop[f.dev] ? 'd:' + f.dev : '__others';
     };
     const destOf = function (f) {
@@ -1024,12 +1066,17 @@
     const destRank = function (x) { return x === 'store' || x === 'x:canonical' ? 0 : x === '__dropped' ? 2 : 1; };
     ids.dest.sort(function (a, b) { return destRank(a) - destRank(b); });
     function dim(label, list, lab) { const values = list.map(function (id) { return { id: id, label: lab(id) }; }); const index = {}; values.forEach(function (v, i) { index[v.id] = i; }); return { label: label, values: values, index: index }; }
-    const devLabel = (DEV_GROUPS.filter(function (o) { return o.id === devGroupBy; })[0] || {}).label;
+    const devLabel = devGroupLabel(devGroupBy);
+    if (grouped && devGroupBy !== 'group') {
+      const idx = (TL.DIMENSIONS[devGroupBy] || {}).index || {};
+      ids.src.sort(function (a, b) { return (idx[a.slice(2)] != null ? idx[a.slice(2)] : 99) - (idx[b.slice(2)] != null ? idx[b.slice(2)] : 99); });
+    }
     TL.DIMENSIONS.ob_src = dim(grouped ? devLabel : 'Device', ids.src, function (id) {
       if (id === '__others') return 'Others (' + n(others) + ' devices)';
       if (id[0] === 'd') return id.slice(2);
       if (id[0] === 'g') return groupById(id.slice(2)).name;
-      return id.slice(2) === 'none' ? 'Not set' : attrLabel(devGroupBy, id.slice(2));
+      const v = id.slice(2);
+      return v === 'none' && !TL.valueOf(devGroupBy, 'none') ? 'Not set' : attrLabel(devGroupBy, v);
     });
     TL.DIMENSIONS.ob_pub = dim('Publisher (snap)', ids.pub, function (id) { return id === '__snapd' ? 'snapd (updates)' : snapLabel(id); });
     TL.DIMENSIONS.ob_pol = dim('Policy', ids.pol, function (id) { return id === 'updates' ? 'Update traffic' : id === 'none' ? 'No shaping' : policyById(id).name; });
@@ -1040,7 +1087,8 @@
       const v = id.slice(2);
       return destGroupBy === 'cls' ? (CLASSES[v] || v) : v === 'none' ? 'Not set' : v;
     });
-    const tot = facts.reduce(function (sum, f) { return sum + f.count; }, 0), gb = tot > 5000;
+    // Pick the unit once from the latest month so it doesn't flip between days on the timeline
+    const tot = flows(per(LAST_MONTH)).reduce(function (sum, f) { return sum + f.count; }, 0), gb = tot > 50000;
     const mapped = facts.map(function (f) { return { ob_src: srcOf(f), ob_pub: f.pub, ob_pol: f.pol, ob_dest: destOf(f), count: gb ? f.count / 1000 : f.count, kind: f.kind, colour: colourValue(f), conn: f.conn }; });
     const stages = ['ob_src', 'ob_pub', 'ob_pol', 'ob_dest'];
     const focus = first ? function (f) { return f.conn === first || f.kind === 'canonical'; } : flowFocus ? function (f) { return f[flowFocus.dim] === flowFocus.val; } : null;
@@ -1059,7 +1107,7 @@
     agg.links = split;
     const width = Math.max(900, svg.parentNode.clientWidth - 8);
     const rows = Math.max(ids.src.length, ids.pub.length);
-    const L = S.layout(agg, stages, width, Math.max(280, Math.min(760, 40 + rows * 28)), { marginRight: 200, minNode0: grouped ? 1 : 6 });
+    const L = S.layout(agg, stages, width, Math.max(280, Math.min(760, 40 + rows * 28)), { marginRight: 200, minNode0: grouped ? 1 : 6, scaleTo: rangeMax() / (gb ? 1000 : 1) });
     // Line the colours up: at every node, links are stacked by kind (update traffic, your data, dropped)
     // before position, and the node bar is coloured link by link, so each band meets its own colour.
     const PAL = colourPalette(facts);
