@@ -848,7 +848,7 @@
     let html = header('Data flow', 'Data flow', 'How data moves from each device’s snaps, through policies, to each destination.');
     if (!state.connected) return html + emptyNoDevices();
     const first = /first=1/.test(location.hash) && state.firstConnector;
-    if (first) html += '<div class="ob-banner ob-banner--success" role="status"><span class="ob-banner__step">Done</span><p class="ob-banner__text"><strong>Your first data is on its way.</strong> The highlighted path is the connector you just created. Canonical nodes (snapd, update traffic, Canonical Snap Store) are orange.</p><div class="ob-banner__actions"><a class="p-button p-button--small p-button--positive" href="#/overview">Go to Overview</a></div></div>';
+    if (first) html += '<div class="ob-banner ob-banner--success" role="status"><span class="ob-banner__step">Done</span><p class="ob-banner__text"><strong>Your first data is on its way.</strong> The highlighted path is the connector you just created. The Canonical Snap Store is orange.</p><div class="ob-banner__actions"><a class="p-button p-button--small p-button--positive" href="#/overview">Go to Overview</a></div></div>';
     const t = totals(), list = insightsList();
     html += '<div class="p-kpis ob-kpis"><div class="p-kpi"><div class="p-kpi__label">Devices connected</div><div class="p-kpi__value">' + n(devices().length) + '</div></div>' +
       '<div class="p-kpi"><div class="p-kpi__label">Leaving devices / day</div><div class="p-kpi__value">' + mb(t.fleet) + '</div><div class="p-kpi__sub">Includes update traffic with the Canonical Snap Store</div></div>' +
@@ -905,7 +905,9 @@
     const rank = function (x, last) { return last.indexOf(x) >= 0 ? 1 + last.indexOf(x) : 0; };
     ids.pub.sort(function (a, b) { return rank(a, ['__snapd']) - rank(b, ['__snapd']) || snapLabel(a).localeCompare(snapLabel(b)); });
     ids.pol.sort(function (a, b) { return rank(a, ['none', 'updates']) - rank(b, ['none', 'updates']); });
-    ids.dest.sort(function (a, b) { return rank(a, ['store', 'x:canonical', '__dropped']) - rank(b, ['store', 'x:canonical', '__dropped']); });
+    // Canonical destinations first, drops last
+    const destRank = function (x) { return x === 'store' || x === 'x:canonical' ? 0 : x === '__dropped' ? 2 : 1; };
+    ids.dest.sort(function (a, b) { return destRank(a) - destRank(b); });
     function dim(label, list, lab) { const values = list.map(function (id) { return { id: id, label: lab(id) }; }); const index = {}; values.forEach(function (v, i) { index[v.id] = i; }); return { label: label, values: values, index: index }; }
     const devLabel = (DEV_GROUPS.filter(function (o) { return o.id === devGroupBy; })[0] || {}).label;
     TL.DIMENSIONS.ob_src = dim(grouped ? devLabel : 'Device', ids.src, function (id) {
@@ -975,14 +977,14 @@
         });
       });
     });
-    // Canonical nodes keep their orange in every view
-    ['ob_pub:__snapd', 'ob_pol:updates', 'ob_dest:store', 'ob_dest:x:canonical'].forEach(function (id) {
+    // The Canonical destination keeps an orange bar
+    ['ob_dest:store', 'ob_dest:x:canonical'].forEach(function (id) {
       const g = svg.querySelector('.sk-node[data-node="' + id + '"]'); if (!g) return;
       g.querySelectorAll('.sk-node__seg').forEach(function (r) { r.style.fill = ORANGE; });
       const bar = g.querySelector('.sk-node__bar'); if (bar) bar.style.fill = ORANGE;
     });
     $('flow-key').innerHTML = PAL.map(function (pp) { return '<span><i class="ob-key__sw" style="background:' + pp.color + '"></i>' + esc(pp.label) + '</span>'; }).join('') +
-      '<span><i class="ob-key__sw" style="background:' + ORANGE + '"></i>Canonical node</span><span>Click a node to trace its path</span>';
+      '<span><i class="ob-key__sw" style="background:' + ORANGE + '"></i>Canonical destination</span><span>Click a node to trace its path</span>';
     const cols = stages.map(function (st, i) { const node = L.nodes.filter(function (x) { return x.col === i; })[0]; return node ? '<span style="left:' + node.x + 'px">' + TL.DIMENSIONS[st].label + '</span>' : ''; });
     $('flow-legend').innerHTML = cols.join('');
     const note = $('flow-ladder');

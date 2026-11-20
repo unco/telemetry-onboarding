@@ -10,7 +10,7 @@ Prototype of **onboarding** for the Telemetry product, built on the Insights pro
 - Destinations have their own menu item (created inline from a connector or beforehand) because the page makes auditing easy.
 - A connector chooses which snaps (publishers) it carries: all snaps (including ones installed later) or only chosen ones.
 - Data flow keeps the Insights columns: Device → Publisher (snap) → Policy → Destination. It starts ungrouped (by device, with the Insights ladder).
-- Data flow is monochrome (no colour views; clicking a node traces its path, which covers 'where does this go'). Both ends group: Group devices by and Group destinations by. Canonical nodes keep orange bars.
+- Data flow is monochrome (no colour views; clicking a node traces its path, which covers 'where does this go'). Both ends group: Group devices by and Group destinations by. Only the Canonical destination has an orange bar (not snapd or update traffic); Canonical destinations come first.
 - Sankey widths are volume (shows the effect of shaping). Counts can run to millions, so they are not used as widths.
 - Menu: Overview (home icon, landing page) · Groups · Policies · Connectors · Destinations · Data flow (formerly Insights; can still hold insights) · Settings.
 - Onboarding is a module on the Overview, and the only module there until setup is complete. Each step explains its purpose and has "Take me there" to the real page, which shows a banner. Steps are derived from state, so they work for any new joiner; steps done by someone else show who did them.
