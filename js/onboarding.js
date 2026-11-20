@@ -902,7 +902,38 @@
     const width = Math.max(900, svg.parentNode.clientWidth - 8);
     const rows = Math.max(ids.src.length, ids.pub.length);
     const L = S.layout(agg, stages, width, Math.max(280, Math.min(760, 40 + rows * 28)), { marginRight: 200, minNode0: grouped ? 1 : 6 });
-    S.render(svg, L, { palette: [{ id: 'canonical', color: '#E95420' }, { id: 'customer', color: '#4C6E87' }, { id: 'dropped', color: '#B8B8B8' }], focusId: focus ? 'x' : null, unit: gb ? ' GB/day' : ' MB/day' });
+    // Line the colours up: at every node, links are stacked by kind (update traffic, your data, dropped)
+    // before position, and the node bar is coloured link by link, so each band meets its own colour.
+    const PAL = [{ id: 'canonical', color: '#E95420' }, { id: 'customer', color: '#4C6E87' }, { id: 'dropped', color: '#B8B8B8' }];
+    const kindRank = function (l) { for (let i = 0; i < PAL.length; i++) if ((l.seg[PAL[i].id] || 0) > 1e-9) return i; return PAL.length; };
+    L.nodes.forEach(function (nd) {
+      nd.outs.sort(function (a, b) { return kindRank(a) - kindRank(b) || a.t.y - b.t.y; });
+      nd.ins.sort(function (a, b) { return kindRank(a) - kindRank(b) || a.s.y - b.s.y; });
+      let off = 0; nd.outs.forEach(function (l) { l.sy = nd.y + off; off += l.w; });
+      off = 0; nd.ins.forEach(function (l) { l.ty = nd.y + off; off += l.w; });
+    });
+    S.render(svg, L, { palette: PAL, focusId: focus ? 'x' : null, unit: gb ? ' GB/day' : ' MB/day' });
+    const byId = {}; L.nodes.forEach(function (nd) { byId[nd.id] = nd; });
+    svg.querySelectorAll('.sk-node').forEach(function (g) {
+      const nd = byId[g.getAttribute('data-node')]; if (!nd) return;
+      const outs = nd.outs.length > 0, links = outs ? nd.outs : nd.ins, bar = g.querySelector('.sk-node__bar');
+      g.querySelectorAll('.sk-node__seg').forEach(function (r) { r.remove(); });
+      let after = bar;
+      links.forEach(function (l) {
+        const segs = focus ? l.segF : l.seg;
+        let y = outs ? l.sy : l.ty;
+        PAL.forEach(function (pp) {
+          const h = (l.seg[pp.id] || 0) / l.value * l.w, shown = (segs[pp.id] || 0) / l.value * l.w;
+          if (shown > 0.3) {
+            const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+            r.setAttribute('class', 'sk-node__seg'); r.setAttribute('style', 'fill:' + pp.color);
+            r.setAttribute('x', nd.x); r.setAttribute('y', y); r.setAttribute('width', nd.w); r.setAttribute('height', shown);
+            after.after(r); after = r;
+          }
+          y += h;
+        });
+      });
+    });
     const cols = stages.map(function (st, i) { const node = L.nodes.filter(function (x) { return x.col === i; })[0]; return node ? '<span style="left:' + node.x + 'px">' + TL.DIMENSIONS[st].label + '</span>' : ''; });
     $('flow-legend').innerHTML = cols.join('');
     const note = $('flow-ladder');
