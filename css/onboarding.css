@@ -205,3 +205,5 @@ body.jig-open .ob-jig { transform: none; }
 .ob-snaps { border: 0; padding: 0; margin: 8px 0 0 24px; display: grid; gap: 2px; }
 .ob-snaps .ob-muted { font-size: .8125rem; margin-left: 4px; }
 .ob-question { font-size: 1.125rem; margin: 4px 0 12px; }
+.ob-timeline { margin: 8px -16px 0; }
+.ob-demo .p-link { font-size: inherit; }

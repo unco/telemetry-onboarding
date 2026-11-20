@@ -12,7 +12,7 @@ The **Jig** tab on the right edge opens a drawer of prototype controls. Changes 
 - **Devices:** connected or not, whether the server has seen rejected connection attempts, whether some devices opted out.
 - **Who came before me:** invited by Ana Ruiz, and whether she already created a group, a policy or a connector. An unanswered invitation.
 - **My progress:** start at any onboarding step. Everything before it is filled in as if you did it.
-- **After setup:** 7 days of data (insights), first destination degraded (adds a task).
+- **After setup:** data so far (just set up, 7 days for insights, or 3 months for insights plus a timeline on Data flow), first destination degraded (adds a task).
 - **Reset everything.**
 
 ## Scenarios
@@ -46,7 +46,7 @@ Overview (home) · Groups · Policies · Connectors · Destinations · Data flow
 
 ## Data flow
 
-Data flow is drawn from the onboarding state with the Insights prototype's `sankey.js`, with the same columns: device → publisher (snap) → policy → destination. It starts ungrouped, one node per device, following the Insights ladder (up to 15 devices all shown, 16 to 30 a nudge to group, above 30 the top 20 plus Others). Update traffic comes from snapd on every device. **View** works as in Insights: it starts on Neutral (monochrome), and other views (device health, reporting status, residency, confidential compute, lifecycle, energy, Canonical infrastructure) colour each device and its flows end to end. Click any node to trace its path. **Group devices by** (group, site, region, device type, Ubuntu release) collapses the device column, and **Group destinations by** (receiver, type, region) collapses the destination column. The Canonical Snap Store has an orange bar and Canonical destinations are listed first. Widths are volume. After the first connector, its path is highlighted.
+Data flow is drawn from the onboarding state with the Insights prototype's `sankey.js`, with the same columns: device → publisher (snap) → policy → destination. It starts ungrouped, one node per device, following the Insights ladder (up to 15 devices all shown, 16 to 30 a nudge to group, above 30 the top 20 plus Others). Update traffic comes from snapd on every device. **View** works as in Insights: it starts on Neutral (monochrome), and other views (device health, reporting status, residency, confidential compute, lifecycle, energy, Canonical infrastructure) colour each device and its flows end to end. Click any node to trace its path. **Group devices by** (group, site, region, device type, Ubuntu release) collapses the device column, and **Group destinations by** (receiver, type, region) collapses the destination column. The Canonical Snap Store has an orange bar and Canonical destinations are listed first. Widths are volume. After the first connector, its path is highlighted. With 3 months of data, a timeline (Aug to Oct 2026, play or step) appears under the chart; device volumes follow the Insights data month by month.
 
 `insights/` is a copy of the full Insights prototype (demo data) with this app's menu, linked from Data flow.
 
