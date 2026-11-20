@@ -207,3 +207,4 @@ body.jig-open .ob-jig { transform: none; }
 .ob-question { font-size: 1.125rem; margin: 4px 0 12px; }
 .ob-timeline { margin: 8px -16px 0; }
 .ob-demo .p-link { font-size: inherit; }
+.ob-timeline__step { font-size: .8125rem; color: var(--muted); margin-left: auto; }

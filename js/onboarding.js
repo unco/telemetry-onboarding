@@ -241,16 +241,35 @@
   // One fact per (device, snap, connector): kept volume to the destination, the rest to "Dropped by shaping".
   // Update traffic with the store comes from snapd on every device.
   // Data age: 0 (just set up), 7 days (insights) or 90 days (insights and a timeline over the last 3 months)
-  let flowMonth = LAST_MONTH, playT = null;
-  function curMonth() { return state.age === 90 ? flowMonth : LAST_MONTH; }
-  function flows(m) {
-    if (m == null) m = curMonth();
+  // Range presets appear on Data flow once 7 days of data exist. Each preset has its own linear timeline at the
+  // resolution it has: days for Last 7 and Last 30 days, months for Last 3 months. Volumes are always per day.
+  const TODAY = new Date(2026, 10, 20);
+  const RANGES = [
+    { id: '7d', label: 'Last 7 days', n: 7, kind: 'day', age: 7 },
+    { id: '30d', label: 'Last 30 days', n: 30, kind: 'day', age: 90 },
+    { id: '3m', label: 'Last 3 months', n: 3, kind: 'month', age: 90 }
+  ];
+  let flowRange = '7d', flowIdx = 6, playT = null;
+  function rangeById(id) { return RANGES.filter(function (r) { return r.id === id; })[0]; }
+  function rangesAvailable() { return RANGES.filter(function (r) { return state.age >= r.age; }); }
+  function curRange() { return state.age >= 7 ? rangeById(flowRange) : null; }
+  function per(m, day) { return { m: m, day: day == null ? null : day }; }
+  function periodAt(r, idx) { const back = r.n - 1 - idx; return r.kind === 'month' ? per(LAST_MONTH - back) : per(LAST_MONTH, back); }
+  function curPeriod() { const r = curRange(); return r ? periodAt(r, flowIdx) : per(LAST_MONTH); }
+  function curMonth() { return curPeriod().m; }
+  function dayDate(back) { const d = new Date(TODAY); d.setDate(d.getDate() - back); return d; }
+  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  function dayLabel(back, short) { const d = dayDate(back); return short ? d.getDate() + ' ' + MON[d.getMonth()] : DAYS[d.getDay()] + ' ' + d.getDate() + ' ' + MON[d.getMonth()] + ' ' + d.getFullYear(); }
+  function periodLabel(p) { return p.day == null ? 'Daily average, ' + TL.monthLabel(TL.MONTHS[p.m]) : dayLabel(p.day); }
+  function volFactor(dev, p) { return monthFactor(dev, p.m) * (p.day == null ? 1 : 0.85 + 0.3 * hash(dev + 'day' + p.day)); }
+  function flows(pp) {
+    const pd = pp || curPeriod(), m = pd.m;
     const facts = [];
     state.connectors.forEach(function (c) {
       const g = groupById(c.group), p = policyById(c.policy), k = keepOf(p), only = connSnaps(c);
       groupDevices(g).forEach(function (d) {
         if (c.canonical) { facts.push({ dev: d.id, grp: c.group, pub: '__snapd', pol: 'updates', dest: c.dest, count: STORE_VOL, kind: 'canonical', conn: c.id }); return; }
-        const sv = snapVols(d), mf = monthFactor(d.id, m);
+        const sv = snapVols(d), mf = volFactor(d.id, pd);
         Object.keys(sv).forEach(function (sn) {
           if (only && only.indexOf(sn) < 0) return;
           const v = sv[sn] * mf, base = { dev: d.id, grp: c.group, pub: sn, pol: c.policy || 'none', conn: c.id };
@@ -261,13 +280,14 @@
     });
     return facts;
   }
-  function totals(m) {
+  function totals(pp) {
+    const pd = pp || curPeriod();
     // fleet = data leaving devices: update traffic from every device, plus each snap's data once
     // if it is in at least one connector (a device's other snaps send nothing)
-    const f = flows(m), out = { fleet: 0, delivered: 0, dropped: 0, byDest: {}, byConn: {} }, seen = {};
+    const f = flows(pd), out = { fleet: 0, delivered: 0, dropped: 0, byDest: {}, byConn: {} }, seen = {};
     devices().forEach(function () { out.fleet += STORE_VOL; });
     f.forEach(function (x) {
-      if (x.kind !== 'canonical') { const key = x.dev + '|' + x.pub; if (!seen[key]) { seen[key] = 1; out.fleet += snapVols(ALL_BY_ID[x.dev])[x.pub] * monthFactor(x.dev, m == null ? curMonth() : m); } }
+      if (x.kind !== 'canonical') { const key = x.dev + '|' + x.pub; if (!seen[key]) { seen[key] = 1; out.fleet += snapVols(ALL_BY_ID[x.dev])[x.pub] * volFactor(x.dev, pd); } }
       if (x.kind === 'dropped') out.dropped += x.count; else { out.delivered += x.count; out.byDest[x.dest] = (out.byDest[x.dest] || 0) + x.count; }
       out.byConn[x.conn] = (out.byConn[x.conn] || 0) + (x.kind === 'dropped' ? 0 : x.count);
     });
@@ -472,11 +492,11 @@
   }
 
   function insightsList() {
-    const t = totals(LAST_MONTH), out = [];
+    const t = totals(per(LAST_MONTH)), out = [];
     if (!state.age) return out;
     // Uses the Data flow filters: Show me sets View (Device health), Group devices by (Site) and traces the destination
     const sick = {}, toDest = {};
-    flows(LAST_MONTH).forEach(function (f) {
+    flows(per(LAST_MONTH)).forEach(function (f) {
       if (f.kind !== 'customer') return;
       const a = latestAttrs(f.dev);
       if (a.healthScore < 60) { sick[f.dev] = a.site; toDest[f.dest] = (toDest[f.dest] || 0) + f.count; }
@@ -491,11 +511,11 @@
         show: 'flow?show=health', flow: { view: 'health', dev: 'site', dest: 'none', select: 'ob_dest:' + dest } });
     }
     if (state.age === 90) {
-      const a = totals(LAST_MONTH - 2), b = totals(LAST_MONTH);
+      const a = totals(per(LAST_MONTH - 2)), b = totals(per(LAST_MONTH));
       const dests = Object.keys(b.byDest).filter(function (id) { return id !== 'store' && a.byDest[id]; });
       const moved = dests.map(function (id) { return { id: id, ch: (b.byDest[id] - a.byDest[id]) / a.byDest[id] }; }).sort(function (x, y) { return Math.abs(y.ch) - Math.abs(x.ch); })[0];
       if (moved && Math.abs(moved.ch) >= 0.05) out.push({ id: 'trend', who: 'Platform', title: 'Data to ' + destById(moved.id).name + ' is ' + (moved.ch > 0 ? 'up' : 'down') + ' ' + Math.round(Math.abs(moved.ch) * 100) + '% since ' + TL.monthLabel(TL.MONTHS[LAST_MONTH - 2]),
-        body: 'Play the timeline in Data flow to see which devices and snaps changed.', show: 'flow?show=trend', flow: { view: 'neutral', dev: 'none', dest: 'none', select: 'ob_dest:' + moved.id, month: LAST_MONTH - 2 } });
+        body: 'Play the timeline in Data flow to see which devices and snaps changed.', show: 'flow?show=trend', flow: { view: 'neutral', dev: 'none', dest: 'none', select: 'ob_dest:' + moved.id, range: '3m', idx: 0 } });
     }
     const shaped = state.connectors.filter(function (c) { return !c.canonical && keepOf(policyById(c.policy)) < 1; });
     if (shaped.length) out.push({ who: 'Platform', title: 'Shaping keeps ' + mb(t.dropped * 7) + ' a week out of your destinations', body: 'Across ' + shaped.length + ' connector' + (shaped.length > 1 ? 's' : '') + '. Your destinations bill by volume.', show: 'flow' });
@@ -883,24 +903,30 @@
   // ---- Data flow -------------------------------------------------------
   let flowFocus = null;
   function timelineHtml() {
-    const first = LAST_MONTH - 2, span = 2;
+    const r = curRange(), last = r.n - 1, unit = r.kind === 'month' ? 'month' : 'day';
+    const tickEvery = r.n <= 7 ? 1 : r.n <= 3 ? 1 : 7;
+    let ticks = '';
+    for (let i = 0; i <= last; i++) {
+      if (r.kind === 'day' && i % tickEvery !== last % tickEvery) continue;
+      const pd = periodAt(r, i);
+      const lab = pd.day == null ? TL.monthLabel(TL.MONTHS[pd.m], true) : r.n <= 7 ? DAYS[dayDate(pd.day).getDay()] + ' ' + dayDate(pd.day).getDate() : dayLabel(pd.day, true);
+      ticks += '<button type="button" class="p-timeline__tick' + (i === flowIdx ? ' is-active' : '') + '" data-act="tl-idx" data-idx="' + i + '" style="left:' + (i / last * 100) + '%">' + lab + '</button>';
+    }
     return '<div class="p-timeline ob-timeline"><div class="p-timeline__controls">' +
-      '<button type="button" class="p-icon-button" data-act="tl-prev" aria-label="Previous month"' + (flowMonth <= first ? ' disabled' : '') + '>◀</button>' +
+      '<button type="button" class="p-icon-button" data-act="tl-prev" aria-label="Previous ' + unit + '"' + (flowIdx <= 0 ? ' disabled' : '') + '>◀</button>' +
       '<button type="button" class="p-button p-button--positive" data-act="tl-play">' + (playT ? '❚❚ Pause' : '▶ Play') + '</button>' +
-      '<button type="button" class="p-icon-button" data-act="tl-next" aria-label="Next month"' + (flowMonth >= LAST_MONTH ? ' disabled' : '') + '>▶</button>' +
-      '<span class="p-timeline__period">' + TL.monthLabel(TL.MONTHS[flowMonth]) + '</span></div>' +
-      '<div class="p-timeline__track"><input type="range" class="p-timeline__range" id="tl-range" min="' + first + '" max="' + LAST_MONTH + '" step="1" value="' + flowMonth + '" aria-label="Month">' +
-      '<div class="p-timeline__ticks">' + [0, 1, 2].map(function (i) {
-        const mi = first + i;
-        return '<button type="button" class="p-timeline__tick' + (mi === flowMonth ? ' is-active' : '') + '" data-act="tl-month" data-month="' + mi + '" style="left:' + (i / span * 100) + '%">' + TL.monthLabel(TL.MONTHS[mi], true) + '</button>';
-      }).join('') + '</div></div></div>';
+      '<button type="button" class="p-icon-button" data-act="tl-next" aria-label="Next ' + unit + '"' + (flowIdx >= last ? ' disabled' : '') + '>▶</button>' +
+      '<span class="p-timeline__period">' + esc(periodLabel(curPeriod())) + '</span>' +
+      '<span class="ob-timeline__step">Step: 1 ' + unit + '</span></div>' +
+      '<div class="p-timeline__track"><input type="range" class="p-timeline__range" id="tl-range" min="0" max="' + last + '" step="1" value="' + flowIdx + '" aria-label="' + (unit === 'day' ? 'Day' : 'Month') + '">' +
+      '<div class="p-timeline__ticks">' + ticks + '</div></div></div>';
   }
   function stopPlay() { if (playT) { clearInterval(playT); playT = null; } }
   function applyInsight(id) {
     const i = insightsList().filter(function (x) { return x.id === id; })[0];
     if (!i || !i.flow) return;
     flowView = i.flow.view; devGroupBy = i.flow.dev; destGroupBy = i.flow.dest;
-    flowMonth = i.flow.month != null ? i.flow.month : LAST_MONTH;
+    if (i.flow.range && state.age >= rangeById(i.flow.range).age) { flowRange = i.flow.range; flowIdx = i.flow.idx; } else { flowRange = '7d'; flowIdx = 6; }
     const k = i.flow.select.indexOf(':'); flowFocus = { dim: i.flow.select.slice(0, k), val: i.flow.select.slice(k + 1) };
   }
   function pageFlow() {
@@ -910,15 +936,16 @@
     if (!state.connected) return html + emptyNoDevices();
     const first = /first=1/.test(location.hash) && state.firstConnector;
     if (first) html += '<div class="ob-banner ob-banner--success" role="status"><span class="ob-banner__step">Done</span><p class="ob-banner__text"><strong>Your first data is on its way.</strong> The highlighted path is the connector you just created. The Canonical Snap Store is orange.</p><div class="ob-banner__actions"><a class="p-button p-button--small p-button--positive" href="#/overview">Go to Overview</a></div></div>';
-    const t = totals(), list = insightsList(), tl = state.age === 90;
-    const per = tl ? ' · ' + TL.monthLabel(TL.MONTHS[flowMonth]) : '';
-    html += '<div class="p-kpis ob-kpis"><div class="p-kpi"><div class="p-kpi__label">Devices connected</div><div class="p-kpi__value">' + n(devices().length) + '</div></div>' +
-      '<div class="p-kpi"><div class="p-kpi__label">Leaving devices / day' + per + '</div><div class="p-kpi__value">' + mb(t.fleet) + '</div><div class="p-kpi__sub">Includes update traffic with the Canonical Snap Store</div></div>' +
+    if (!rangeById(flowRange) || state.age < rangeById(flowRange).age) { flowRange = '7d'; flowIdx = 6; }
+    const t = totals(), list = insightsList(), tl = state.age >= 7;
+        html += '<div class="p-kpis ob-kpis"><div class="p-kpi"><div class="p-kpi__label">Devices connected</div><div class="p-kpi__value">' + n(devices().length) + '</div>' + (tl ? '<div class="p-kpi__sub">Figures for ' + esc(periodLabel(curPeriod()).replace('Daily average, ', '')) + (curPeriod().day == null ? ' (daily average)' : '') + '</div>' : '') + '</div>' +
+      '<div class="p-kpi"><div class="p-kpi__label">Leaving devices / day</div><div class="p-kpi__value">' + mb(t.fleet) + '</div><div class="p-kpi__sub">Includes update traffic with the Canonical Snap Store</div></div>' +
       '<div class="p-kpi"><div class="p-kpi__label">Delivered / day</div><div class="p-kpi__value">' + mb(t.delivered) + '</div><div class="p-kpi__sub">Can be higher than data leaving devices when a device sends to several destinations</div></div>' +
       '<div class="p-kpi"><div class="p-kpi__label">Dropped by shaping / day</div><div class="p-kpi__value">' + mb(t.dropped) + '</div></div></div>';
     if (list.length) html += '<details class="p-card ob-flowinsights"><summary>' + list.length + ' insight' + (list.length > 1 ? 's' : '') + ' available</summary><ul class="ob-list">' + list.map(function (i) { return '<li class="ob-insight"><span class="p-badge">' + i.who + '</span><div><strong>' + esc(i.title) + '</strong><p>' + i.body + '</p></div>' + (i.flow ? '<button type="button" class="p-link" data-act="show-insight" data-id="' + i.id + '">Show me</button>' : '') + '</li>'; }).join('') + '</ul></details>';
     const opt = function (list, cur) { return list.map(function (o) { return '<option value="' + o.id + '"' + (o.id === cur ? ' selected' : '') + '>' + o.label + '</option>'; }).join(''); };
     html += '<div class="p-toolbar ob-flowbar">' +
+      (state.age >= 7 ? '<div class="p-field"><label class="p-field__label" for="flow-range">Range</label><select id="flow-range" class="p-select">' + opt(rangesAvailable(), flowRange) + '</select></div>' : '') +
       '<div class="p-field"><label class="p-field__label" for="flow-view">View</label><select id="flow-view" class="p-select">' + viewOptions() + '</select></div>' +
       '<div class="p-field"><label class="p-field__label" for="flow-devgroup">Group devices by</label><select id="flow-devgroup" class="p-select">' + opt(DEV_GROUPS, devGroupBy) + '</select></div>' +
       '<div class="p-field"><label class="p-field__label" for="flow-destgroup">Group destinations by</label><select id="flow-destgroup" class="p-select">' + opt(DEST_GROUPS, destGroupBy) + '</select></div></div>' +
@@ -1159,7 +1186,7 @@
         '<p class="ob-jig__hint">Fills in everything before that step as if you did it. Keeps the settings above.</p></section>' +
       '<section class="ob-jig__sec"><h3>After setup</h3>' +
         '<label class="ob-jig__field"><span>Data so far</span><select class="p-select" data-jig="age">' +
-        [[0, 'Just set up'], [7, '7 days (insights)'], [90, '3 months (insights and timeline)']].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === state.age ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>' +
+        [[0, 'Just set up'], [7, '7 days (insights, Last 7 days range)'], [90, '3 months (adds 30 days and 3 months ranges)']].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === state.age ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>' +
         chk('degraded', j.degraded, 'Your first destination is degraded', 'Adds a task and a Degraded badge') + '</section>' +
       '<div class="ob-jig__foot"><button type="button" class="p-link p-link--negative" data-jig="reset">Reset everything</button></div>';
   }
@@ -1181,7 +1208,7 @@
     else if (k === 'pending') {
       state.users = state.users.filter(function (u) { return u.status !== 'invited'; });
       if (on) state.users.push({ name: '', email: 'sam@example.com', role: 'Operator', status: 'invited' });
-    } else if (k === 'age') { state.age = +el.value; flowMonth = LAST_MONTH; stopPlay(); }
+    } else if (k === 'age') { state.age = +el.value; flowRange = '7d'; flowIdx = 6; stopPlay(); }
     else return;
     save(); render();
   }
@@ -1224,10 +1251,18 @@
     else if (act === 'about-save') { state.aboutDone = true; if (!state.primary || state.intents.indexOf(state.primary) < 0) state.primary = state.intents[0]; save(); render(); }
     else if (act === 'about-skip') { state.aboutDone = true; save(); render(); }
     else if (act === 'dismiss-setup') { state.setupNoted = true; save(); render(); }
-    else if (act === 'set-age') { state.age = +b.getAttribute('data-age'); flowMonth = LAST_MONTH; save(); render(); }
-    else if (act === 'tl-prev' || act === 'tl-next') { stopPlay(); flowMonth = Math.max(LAST_MONTH - 2, Math.min(LAST_MONTH, flowMonth + (act === 'tl-next' ? 1 : -1))); render(); }
-    else if (act === 'tl-play') { if (playT) stopPlay(); else { if (flowMonth === LAST_MONTH) flowMonth = LAST_MONTH - 2; render(); playT = setInterval(function () { if (flowMonth >= LAST_MONTH) { stopPlay(); render(); return; } flowMonth++; render(); }, 1400); render(); } }
-    else if (act === 'tl-month') { stopPlay(); flowMonth = +b.getAttribute('data-month'); render(); }
+    else if (act === 'set-age') { state.age = +b.getAttribute('data-age'); flowRange = '7d'; flowIdx = 6; save(); render(); }
+    else if (act === 'tl-prev' || act === 'tl-next') { stopPlay(); flowIdx = Math.max(0, Math.min(curRange().n - 1, flowIdx + (act === 'tl-next' ? 1 : -1))); render(); }
+    else if (act === 'tl-play') {
+      if (playT) { stopPlay(); render(); }
+      else {
+        const last = curRange().n - 1, ms = curRange().kind === 'month' ? 1400 : curRange().n > 7 ? 350 : 900;
+        if (flowIdx >= last) flowIdx = 0;
+        playT = setInterval(function () { if (flowIdx >= last) { stopPlay(); render(); return; } flowIdx++; render(); }, ms);
+        render();
+      }
+    }
+    else if (act === 'tl-idx') { stopPlay(); flowIdx = +b.getAttribute('data-idx'); render(); }
     else if (act === 'reset') { localStorage.removeItem(KEY); state = fresh(); render(); toast('Scenario reset'); }
     else if (act === 'q-add') { gdraft.query.push({ attr: 'region', op: 'is', val: QA.region ? QA.region.values[0].id : '' }); $('q-rows').innerHTML = queryRows(); $('g-preview').innerHTML = groupPreview(); }
     else if (act === 'q-del') { gdraft.query.splice(+b.getAttribute('data-i'), 1); $('q-rows').innerHTML = queryRows(); $('g-preview').innerHTML = groupPreview(); }
@@ -1254,6 +1289,7 @@
     } else if (el.name === 'kind') { gdraft.kind = el.value; main.querySelectorAll('.ob-radio-card').forEach(function (c) { c.classList.toggle('is-on', c.querySelector('input').checked); }); $('g-preview').innerHTML = groupPreview(); }
     else if (el.id === 'flow-devgroup') { devGroupBy = el.value; flowFocus = null; drawFlow(); }
     else if (el.id === 'flow-destgroup') { destGroupBy = el.value; flowFocus = null; drawFlow(); }
+    else if (el.id === 'flow-range') { stopPlay(); flowRange = el.value; flowIdx = rangeById(flowRange).n - 1; render(); }
     else if (el.id === 'flow-view') { flowView = el.value; $('flow-question').textContent = currentView().question; drawFlow(); }
     else if (el.id === 'p-purpose') pdraft.purpose = el.value;
     else if (el.id && /^p-(dropDebug|metricsOnly|redact)$/.test(el.id)) { pdraft.rules[el.id.slice(2)] = el.checked; $('p-preview').innerHTML = policyPreview(); }
@@ -1272,7 +1308,7 @@
   });
   main.addEventListener('input', function (e) {
     const el = e.target;
-    if (el.id === 'tl-range') { stopPlay(); flowMonth = +el.value; render(); const r = $('tl-range'); if (r) r.focus(); return; }
+    if (el.id === 'tl-range') { stopPlay(); flowIdx = +el.value; render(); const r = $('tl-range'); if (r) r.focus(); return; }
     if (el.id === 'g-name') { gdraft.name = el.value; $('g-name-err').hidden = true; }
     else if (el.id === 'p-name') { pdraft.name = el.value; $('p-name-err').hidden = true; }
     else if (el.id === 'p-sample') { pdraft.rules.sample = +el.value; $('p-sample-v').textContent = el.value + '%'; $('p-preview').innerHTML = policyPreview(); }
