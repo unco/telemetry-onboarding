@@ -1033,9 +1033,30 @@
       .map(function (x) { return { id: x.id, color: x.color || NO_COLOUR, label: x.label }; })
       .concat(seen.none && !(TL.ATTRIBUTES[v.attr] || { values: [] }).values.some(function (x) { return x.id === 'none'; }) ? [{ id: 'none', color: NO_COLOUR, label: 'Not set' }] : []);
   }
+  // When only the period changes (stepping or playing the timeline), flows ease from the old values to the new
+  // ones, as in the Insights prototype. Any other change redraws straight away.
+  let lastFlow = null, animRaf = null, playMs = 900;
   function drawFlow() {
     const svg = $('flow-svg'); if (!svg) return;
-    const facts = flows();
+    if (animRaf) { cancelAnimationFrame(animRaf); animRaf = null; }
+    const pd = curPeriod();
+    const ctxKey = [SCEN.fleet, flowRange, devGroupBy, destGroupBy, flowView, JSON.stringify(flowFocus), location.hash, state.changes.length, svg.parentNode.clientWidth].join('|');
+    const fromP = lastFlow && lastFlow.ctx === ctxKey && (lastFlow.p.m !== pd.m || lastFlow.p.day !== pd.day) ? lastFlow.p : null;
+    lastFlow = { ctx: ctxKey, p: pd };
+    const prep = prepareFlow(pd, fromP);
+    const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!fromP || reduce) { paintFlow(svg, prep, 1); return; }
+    const dur = playT ? Math.min(600, playMs * 0.8) : 600, t0 = performance.now();
+    const step = function (now) {
+      const t = Math.min(1, (now - t0) / dur);
+      paintFlow($('flow-svg'), prep, t);
+      animRaf = t < 1 ? requestAnimationFrame(step) : null;
+    };
+    paintFlow(svg, prep, 0);
+    animRaf = requestAnimationFrame(step);
+  }
+  function prepareFlow(pd, fromP) {
+    const facts = flows(pd), factsFrom = fromP ? flows(fromP) : [];
     const first = /first=1/.test(location.hash) ? state.firstConnector : null;
     const grouped = devGroupBy !== 'none';
     // rank devices by volume for the top 20
@@ -1058,7 +1079,7 @@
     const ids = { src: [], pub: [], pol: [], dest: [] }, seen = { src: {}, pub: {}, pol: {}, dest: {} };
     const add = function (k, v) { if (!seen[k][v]) { seen[k][v] = 1; ids[k].push(v); } };
     if (!grouped) top.forEach(function (id) { add('src', 'd:' + id); });
-    facts.forEach(function (f) { add('src', srcOf(f)); add('pub', f.pub); add('pol', f.pol); add('dest', destOf(f)); });
+    facts.concat(factsFrom).forEach(function (f) { add('src', srcOf(f)); add('pub', f.pub); add('pol', f.pol); add('dest', destOf(f)); });
     const rank = function (x, last) { return last.indexOf(x) >= 0 ? 1 + last.indexOf(x) : 0; };
     ids.pub.sort(function (a, b) { return rank(a, ['__snapd']) - rank(b, ['__snapd']) || snapLabel(a).localeCompare(snapLabel(b)); });
     ids.pol.sort(function (a, b) { return rank(a, ['none', 'updates']) - rank(b, ['none', 'updates']); });
@@ -1089,28 +1110,36 @@
     });
     // Pick the unit once from the latest month so it doesn't flip between days on the timeline
     const tot = flows(per(LAST_MONTH)).reduce(function (sum, f) { return sum + f.count; }, 0), gb = tot > 50000;
-    const mapped = facts.map(function (f) { return { ob_src: srcOf(f), ob_pub: f.pub, ob_pol: f.pol, ob_dest: destOf(f), count: gb ? f.count / 1000 : f.count, kind: f.kind, colour: colourValue(f), conn: f.conn }; });
+    const mapF = function (f) { return { ob_src: srcOf(f), ob_pub: f.pub, ob_pol: f.pol, ob_dest: destOf(f), count: gb ? f.count / 1000 : f.count, kind: f.kind, colour: colourValue(f), conn: f.conn }; };
     const stages = ['ob_src', 'ob_pub', 'ob_pol', 'ob_dest'];
     const focus = first ? function (f) { return f.conn === first || f.kind === 'canonical'; } : flowFocus ? function (f) { return f[flowFocus.dim] === flowFocus.val; } : null;
-    const agg = S.aggregate(mapped, stages, { segAttr: 'colour', focus: focus });
+    const aggTo = S.aggregate(facts.map(mapF), stages, { segAttr: 'colour', focus: focus });
+    const aggFrom = fromP ? S.aggregate(factsFrom.map(mapF), stages, { segAttr: 'colour', focus: focus }) : null;
+    return { aggTo: aggTo, aggFrom: aggFrom, stages: stages, focus: focus, PAL: colourPalette(facts.concat(factsFrom)), grouped: grouped, gb: gb, ids: ids, ranked: ranked, others: others };
+  }
+  function paintFlow(svg, P, t) {
+    if (!svg) return;
+    const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    const agg0 = P.aggFrom ? S.interpolate(P.aggFrom, P.aggTo, e) : P.aggTo;
+    const stages = P.stages, focus = P.focus, grouped = P.grouped, gb = P.gb, ids = P.ids, ranked = P.ranked, others = P.others;
     // One band per colour: a link carrying your data and dropped data becomes two bands,
     // so every node's bar reads update traffic, then your data, then dropped, on both sides.
     const split = {};
-    Object.keys(agg.links).forEach(function (key) {
-      const l = agg.links[key];
+    Object.keys(agg0.links).forEach(function (key) {
+      const l = agg0.links[key]; if (!(l.value > 1e-9)) return;
       Object.keys(l.seg).forEach(function (kind) {
         const v = l.seg[kind]; if (v <= 1e-9) return;
         const seg = {}, segF = {}; seg[kind] = v; if (l.segF[kind]) segF[kind] = l.segF[kind];
         split[key + '#' + kind] = Object.assign({}, l, { key: key + '#' + kind, value: v, b: l.b * v / l.value, f: l.segF[kind] || 0, seg: seg, segF: segF });
       });
     });
-    agg.links = split;
+    const agg = { nodes: agg0.nodes, links: split, total: agg0.total, totalSeg: agg0.totalSeg };
     const width = Math.max(900, svg.parentNode.clientWidth - 8);
     const rows = Math.max(ids.src.length, ids.pub.length);
     const L = S.layout(agg, stages, width, Math.max(280, Math.min(760, 40 + rows * 28)), { marginRight: 200, minNode0: grouped ? 1 : 6, scaleTo: rangeMax() / (gb ? 1000 : 1) });
     // Line the colours up: at every node, links are stacked by kind (update traffic, your data, dropped)
     // before position, and the node bar is coloured link by link, so each band meets its own colour.
-    const PAL = colourPalette(facts);
+    const PAL = P.PAL;
     const kindRank = function (l) { for (let i = 0; i < PAL.length; i++) if ((l.seg[PAL[i].id] || 0) > 1e-9) return i; return PAL.length; };
     L.nodes.forEach(function (nd) {
       nd.outs.sort(function (a, b) { return kindRank(a) - kindRank(b) || a.t.y - b.t.y; });
@@ -1304,7 +1333,8 @@
     else if (act === 'tl-play') {
       if (playT) { stopPlay(); render(); }
       else {
-        const last = curRange().n - 1, ms = curRange().kind === 'month' ? 1400 : curRange().n > 7 ? 350 : 900;
+        const last = curRange().n - 1, ms = curRange().kind === 'month' ? 1400 : curRange().n > 7 ? 450 : 900;
+        playMs = ms;
         if (flowIdx >= last) flowIdx = 0;
         playT = setInterval(function () { if (flowIdx >= last) { stopPlay(); render(); return; } flowIdx++; render(); }, ms);
         render();
