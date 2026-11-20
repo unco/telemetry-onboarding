@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Telemetry</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Ubuntu+Sans:wght@300;400;500;600&family=Ubuntu+Sans+Mono&display=swap">
+  <link rel="stylesheet" href="css/app.css?v=20261120a">
+  <link rel="stylesheet" href="css/onboarding.css?v=20261120a">
+  <script>
+    // Demo scenario is chosen by URL: ?fleet=zero|hobby|mid|enterprise&landscape=0|1&joiner=1
+    // A zero fleet loads the mid fleet's data, which "arrives" once a device connects.
+    (function () {
+      var p = new URLSearchParams(location.search), f = p.get('fleet');
+      window.TL_FLEET = f === 'zero' || !f ? 'mid' : f;
+    })();
+  </script>
+</head>
+<body>
+<div class="l-app">
+  <header class="l-topbar">
+    <button type="button" class="l-topbar__menu" id="nav-toggle" aria-controls="side-nav" aria-expanded="false" aria-label="Open navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <span class="l-topbar__tag" aria-hidden="true"></span>
+    <span class="l-topbar__product">Telemetry</span>
+    <span class="l-topbar__page" id="topbar-page">Overview</span>
+  </header>
+  <div class="l-nav-overlay" id="nav-overlay" hidden></div>
+
+  <nav class="l-nav" id="side-nav" aria-label="Main">
+    <div class="l-nav__brand">
+      <span class="l-nav__tag" aria-hidden="true"></span>
+      <span class="l-nav__product">Telemetry</span>
+    </div>
+    <ul class="l-nav__list" id="nav-list"></ul>
+    <ul class="l-nav__list l-nav__list--bottom">
+      <li><a class="l-nav__item" href="#/settings" data-route="settings"><span class="l-nav__icon" aria-hidden="true">⚙</span>Settings</a></li>
+      <li class="l-nav__user"><span class="l-nav__avatar" aria-hidden="true" id="nav-avatar">HC</span><span id="nav-user">Hayden Chambers</span></li>
+    </ul>
+  </nav>
+
+  <main class="l-main" id="main" tabindex="-1"></main>
+</div>
+<div class="ob-toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="js/data.js?v=20261120a"></script>
+<script src="js/sankey.js?v=20261120a"></script>
+<script src="js/onboarding.js?v=20261120a"></script>
+</body>
+</html>
