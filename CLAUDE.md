@@ -16,6 +16,9 @@ Prototype of **onboarding** for the Telemetry product, built on the Insights pro
 - Governance (approvals) is not in the MVP. Connectors go live on creation; other admins are notified; changes are logged. The Tasks module notes that approvals arrive later.
 - After setup, the Overview shows Tasks (act), Insights (know, each links into Data flow), Recent changes, Destination health. Before data builds up, Insights shows "first insights after about 24 hours" (demo link skips ahead 7 days).
 
+## Jig
+- Right-hand drawer ("Jig" tab) with prototype controls; the user asked for it to change things like whether devices are set up or whether someone set up a group before them. Keep demo controls there, not in Settings.
+
 ## Writing style
 - Plain, factual UI copy. No em dashes. Sentence case.
 - Vanilla-inspired styling from the Insights prototype (`css/app.css`); additions go in `css/onboarding.css` with `ob-` prefixes.

@@ -176,3 +176,26 @@ a.p-button--positive { color: #fff; }
   .ob-task .p-link { grid-column: 2; }
 }
 .ob-qrow .p-select { min-width: 0; width: 100%; }
+
+/* Jig drawer: prototype controls on the right */
+.ob-jig-tab { position: fixed; right: 0; top: 50%; transform: translateY(-50%); z-index: 40; writing-mode: vertical-rl; background: var(--ink); color: #fff; border: 0; padding: 14px 8px; cursor: pointer; font-size: .875rem; letter-spacing: .08em; border-radius: 2px 0 0 2px; transition: right .2s; }
+.ob-jig-tab:hover { background: #333; }
+body.jig-open .ob-jig-tab { right: 320px; }
+.ob-jig { position: fixed; top: 0; right: 0; width: 320px; height: 100vh; overflow-y: auto; background: #fff; border-left: 1px solid var(--border); box-shadow: -4px 0 16px rgba(0,0,0,.08); z-index: 40; transform: translateX(100%); transition: transform .2s; padding: 16px 20px 24px; }
+body.jig-open .ob-jig { transform: none; }
+@media (prefers-reduced-motion: reduce) { .ob-jig, .ob-jig-tab { transition: none; } }
+@media (min-width: 1280px) { body.jig-open .l-app { margin-right: 320px; } }
+.ob-jig__head { display: flex; justify-content: space-between; align-items: center; }
+.ob-jig__title { font-size: 1.25rem; font-weight: 400; margin: 0; }
+.ob-jig__now { font-size: .875rem; background: var(--bg-soft); padding: 8px 10px; margin: 12px 0 4px; }
+.ob-jig__sec { border-top: 1px solid var(--border); padding: 12px 0 4px; margin-top: 12px; }
+.ob-jig__sec h3 { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 400; margin: 0 0 8px; }
+.ob-jig__check { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; cursor: pointer; font-size: .9375rem; }
+.ob-jig__check input { margin-top: 4px; }
+.ob-jig__check small { display: block; color: var(--muted); font-size: .8125rem; }
+.ob-jig__check.is-disabled { color: var(--faint); cursor: not-allowed; }
+.ob-jig__field { display: flex; flex-direction: column; gap: 4px; font-size: .8125rem; color: var(--muted); margin-bottom: 8px; }
+.ob-jig__field .p-select { width: 100%; color: var(--text); font-size: .9375rem; }
+.ob-jig__hint { font-size: .8125rem; color: var(--muted); margin: 6px 0 0; }
+.ob-jig__foot { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 12px; }
+@media (max-width: 760px) { .ob-jig { width: 100vw; } body.jig-open .ob-jig-tab { display: none; } }

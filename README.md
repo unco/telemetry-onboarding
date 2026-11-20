@@ -4,9 +4,20 @@ A dependency-free prototype of first-run onboarding for the Telemetry product. I
 
 Open `index.html` in a browser, or serve the folder (`python3 -m http.server`). There is no build step. All data is synthetic, and state is kept in `localStorage` per scenario.
 
+## Jig
+
+The **Jig** tab on the right edge opens a drawer of prototype controls. Changes apply straight away:
+
+- **Scenario:** fleet size (reloads the page), Landscape linked.
+- **Devices:** connected or not, whether the server has seen rejected connection attempts, whether some devices opted out.
+- **Who came before me:** invited by Ana Ruiz, and whether she already created a group, a policy or a connector. An unanswered invitation.
+- **My progress:** start at any onboarding step. Everything before it is filled in as if you did it.
+- **After setup:** 7 days of data (insights), first destination degraded (adds a task).
+- **Reset everything.**
+
 ## Scenarios
 
-The scenario is set in the URL or in **Settings › Demo scenario**.
+Fleet size is set in the URL or in the jig. `landscape` and `joiner` only seed a fresh state.
 
 | Parameter | Values | What it changes |
 |---|---|---|

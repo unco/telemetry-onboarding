@@ -30,12 +30,13 @@
   const params = new URLSearchParams(location.search);
 
   // ---- Scenario --------------------------------------------------------
+  // Fleet size needs a reload (data.js builds the devices); everything else is live state set from the jig.
+  // ?landscape=0 and ?joiner=1 only seed a fresh state.
   const SCEN = {
-    fleet: ['zero', 'hobby', 'mid', 'enterprise'].indexOf(params.get('fleet')) >= 0 ? params.get('fleet') : 'mid',
-    landscape: params.get('landscape') !== '0',
-    joiner: params.get('joiner') === '1'
+    fleet: ['zero', 'hobby', 'mid', 'enterprise'].indexOf(params.get('fleet')) >= 0 ? params.get('fleet') : 'mid'
   };
-  const KEY = 'tob.v1.' + SCEN.fleet + '.' + (SCEN.landscape ? 'L' : 'n') + (SCEN.joiner ? '.j' : '');
+  const KEY = 'tob.v2.' + SCEN.fleet;
+  function J() { return state.jig; }
   const ME = 'Hayden Chambers';
   const ANA = 'Ana Ruiz', TOM = 'Tom Okafor';
 
@@ -109,17 +110,52 @@
       destinations: [{ id: 'store', name: 'Canonical Snap Store', type: 'Snap Store', cls: 'canonical', region: 'Global', canonical: true, by: 'System', at: now() }],
       connectors: [{ id: 'store', name: 'Updates', group: 'all', policy: null, dest: 'store', canonical: true, by: 'System', at: now() }],
       changes: [], users: [{ name: ME, email: 'hayden@example.com', role: 'Admin', status: 'active' }],
-      flowSeen: false, firstConnector: null, skipAhead: false, introSeen: false, setupNoted: false
+      flowSeen: false, firstConnector: null, skipAhead: false, introSeen: false, setupNoted: false,
+      jig: { landscape: params.get('landscape') !== '0', joiner: false, rejected: true, optedOut: true, degraded: true, open: false }
     };
-    if (SCEN.joiner) {
-      s.users.unshift({ name: ANA, email: 'ana@example.com', role: 'Admin', status: 'active' });
-      s.users.push({ name: TOM, email: 'tom@example.com', role: 'Approver (external destinations)', status: 'active' });
-      s.groups.push({ id: 'g-fra-prod', name: 'Frankfurt production', kind: 'dynamic', query: [{ attr: 'region', op: 'is', val: SCEN.fleet === 'hobby' ? 'ldn' : 'fra' }], members: null, by: ANA, at: now() });
-      s.changes.push({ who: ANA, what: 'created group <strong>Frankfurt production</strong> (dynamic)', at: now() });
-      s.changes.push({ who: ANA, what: 'invited <strong>' + ME + '</strong> as Admin', at: now() });
-      s.changes.push({ who: ANA, what: 'invited <strong>' + TOM + '</strong> as Approver (external destinations)', at: now() });
-    }
+    if (params.get('joiner') === '1') { setJoiner(s, true); setAna(s, 'group', true); }
     return s;
+  }
+
+  // ---- Jig: what other people did before me ---------------------------
+  function setJoiner(s, on) {
+    s.jig.joiner = on;
+    s.users = s.users.filter(function (u) { return u.name !== ANA && u.name !== TOM; });
+    s.changes = s.changes.filter(function (c) { return c.who !== ANA; });
+    if (!on) { ['connector', 'policy', 'group'].forEach(function (k) { setAna(s, k, false); }); return; }
+    s.users.unshift({ name: ANA, email: 'ana@example.com', role: 'Admin', status: 'active' });
+    s.users.push({ name: TOM, email: 'tom@example.com', role: 'Approver (external destinations)', status: 'active' });
+    s.changes.push({ who: ANA, what: 'invited <strong>' + ME + '</strong> as Admin', at: now() });
+    s.changes.push({ who: ANA, what: 'invited <strong>' + TOM + '</strong> as Approver (external destinations)', at: now() });
+  }
+  function anaHas(s, kind) {
+    const list = kind === 'group' ? s.groups : kind === 'policy' ? s.policies : s.connectors;
+    return list.some(function (x) { return x.id === 'ana-' + kind; });
+  }
+  function setAna(s, kind, on) {
+    const id = 'ana-' + kind;
+    const strip = function (list) { return list.filter(function (x) { return x.id !== id; }); };
+    if (!on) {
+      if (kind === 'group') { s.groups = strip(s.groups); setAna(s, 'connector', false); }
+      if (kind === 'policy') { s.policies = strip(s.policies); setAna(s, 'connector', false); }
+      if (kind === 'connector') { s.connectors = strip(s.connectors); s.destinations = s.destinations.filter(function (d) { return d.id !== 'ana-dest'; }); }
+      s.changes = s.changes.filter(function (c) { return c.ana !== kind; });
+      return;
+    }
+    if (anaHas(s, kind)) return;
+    if (kind === 'group') {
+      const val = SCEN.fleet === 'hobby' ? 'ldn' : 'fra';
+      s.groups.push({ id: id, name: SCEN.fleet === 'hobby' ? 'Home servers' : 'Frankfurt production', kind: 'dynamic', query: [{ attr: 'region', op: 'is', val: val }], members: null, by: ANA, at: now() });
+      s.changes.unshift({ who: ANA, ana: kind, what: 'created group <strong>' + s.groups[s.groups.length - 1].name + '</strong> (dynamic)', at: now() });
+    } else if (kind === 'policy') {
+      s.policies.push({ id: id, name: 'Monitoring essentials', template: 'monitoring', purpose: 'analytic', rules: { sample: 100, dropDebug: true, metricsOnly: true, redact: false }, by: ANA, at: now() });
+      s.changes.unshift({ who: ANA, ana: kind, what: 'created policy <strong>Monitoring essentials</strong>', at: now() });
+    } else {
+      setAna(s, 'group', true); setAna(s, 'policy', true);
+      s.destinations.push({ id: 'ana-dest', name: 'Splunk SIEM', type: 'Splunk', cls: 'internal', region: 'EU', by: ANA, at: now() });
+      s.connectors.push({ id: id, name: 'Production to Splunk', group: 'ana-group', policy: 'ana-policy', dest: 'ana-dest', by: ANA, at: now() });
+      s.changes.unshift({ who: ANA, ana: kind, what: 'activated connector <strong>Production to Splunk</strong> (' + s.groups.filter(function (g) { return g.id === 'ana-group'; })[0].name + ' → Splunk SIEM, Internal)', at: now() });
+    }
   }
   let state;
   try { state = JSON.parse(localStorage.getItem(KEY)) || fresh(); } catch (e) { state = fresh(); }
@@ -315,7 +351,7 @@
     let html = '<section class="p-card ob-module ob-onboarding" aria-labelledby="ob-title">' +
       '<div class="ob-module__head"><h2 class="ob-module__title" id="ob-title">Get started</h2>' +
       '<span class="ob-progress">' + STEPS.filter(function (s) { return s.done(); }).length + ' of ' + STEPS.length + ' done</span></div>';
-    if (SCEN.joiner) html += '<p class="ob-intro"><strong>' + ANA + ' invited you and has started setting up.</strong> Steps someone else has done are marked with their name.</p>';
+    if (J().joiner) html += '<p class="ob-intro"><strong>' + ANA + ' invited you and has started setting up.</strong> Steps someone else has done are marked with their name.</p>';
     if (!state.introSeen) html += '<p class="ob-intro">Your devices already get updates through the Canonical Snap Store. Nothing else leaves them until you set up a connector.</p>';
     html += '<ol class="ob-steps">';
     STEPS.forEach(function (s, i) {
@@ -337,7 +373,7 @@
     });
     html += '</ol>';
     html += '<div class="ob-also"><span>You can also do these at any time:</span> <a class="p-link" href="#/settings">Invite colleagues</a> · <a class="p-link" href="#/destinations/new">Add a destination</a>' +
-      (SCEN.landscape ? '' : ' · <a class="p-link" href="#/settings">Link Landscape</a>') + '</div>';
+      (J().landscape ? '' : ' · <a class="p-link" href="#/settings">Link Landscape</a>') + '</div>';
     return html + '</section>';
   }
 
@@ -345,7 +381,7 @@
   function connectBody() {
     if (waiting) return '<div class="ob-waiting" role="status"><span class="ob-spinner" aria-hidden="true"></span>Waiting for your first device…</div>';
     let html = '';
-    if (SCEN.landscape) {
+    if (J().landscape) {
       html += '<div class="ob-connect"><p><strong>Landscape knows ' + n(ALL.length) + ' devices.</strong> None of them send to telemetry yet. Point them at telemetry from Landscape in one step.</p>' +
         '<div class="ob-connect__row"><label class="p-field"><span class="p-field__label">Landscape group</span><select class="p-select" id="ls-group"><option>All devices (' + n(ALL.length) + ')</option></select></label>' +
         '<button type="button" class="p-button p-button--positive" data-act="connect">Point devices at telemetry</button></div></div>';
@@ -357,8 +393,8 @@
     }
     html += '<details class="ob-diag"><summary>Devices should already be connected?</summary>' +
       '<ol class="ob-diag__list">' +
-      '<li><span class="p-badge p-badge--negative">Seen</span> <strong>12 connection attempts rejected in the last hour.</strong> The token belongs to another organisation (acme-labs). Check which token your devices use.</li>' +
-      (SCEN.landscape ? '<li><span class="p-badge">Seen</span> <strong>3 devices in Landscape have opted out of telemetry.</strong> That is their choice, not a fault, and they keep getting updates.</li>' : '') +
+      (J().rejected ? '<li><span class="p-badge p-badge--negative">Seen</span> <strong>12 connection attempts rejected in the last hour.</strong> The token belongs to another organisation (acme-labs). Check which token your devices use.</li>' : '') +
+      (J().landscape && J().optedOut ? '<li><span class="p-badge">Seen</span> <strong>3 devices in Landscape have opted out of telemetry.</strong> That is their choice, not a fault, and they keep getting updates.</li>' : '') +
       '<li><strong>Network.</strong> A proxy, firewall or allowlist may be blocking telemetry.canonical.com.</li>' +
       '<li><strong>Snap version.</strong> Devices need a recent snapd to send telemetry.</li>' +
       '<li><strong>Certificates or clock.</strong> A device with the wrong time fails the TLS check.</li></ol></details>';
@@ -414,7 +450,7 @@
   }
   function tasksList() {
     const out = [];
-    state.destinations.forEach(function (d) { if (d.health === 'degraded') out.push({ sev: 'negative', title: esc(d.name) + ' is rate-limiting deliveries', body: '3% of deliveries are retried. Check its plan limits.', href: '#/destinations' }); });
+    state.destinations.forEach(function (d) { if (isDegraded(d)) out.push({ sev: 'negative', title: esc(d.name) + ' is rate-limiting deliveries', body: '3% of deliveries are retried. Check its plan limits.', href: '#/destinations' }); });
     state.users.filter(function (u) { return u.status === 'invited'; }).forEach(function (u) { out.push({ sev: 'caution', title: esc(u.email) + ' hasn’t accepted the invitation', body: 'Invited as ' + esc(u.role) + '.', href: '#/settings' }); });
     return out;
   }
@@ -438,9 +474,11 @@
       }).join('') + '</ul>' : '<p class="ob-empty">No changes yet.</p>') + '</section>';
   }
   function initials(name) { return name.split(' ').map(function (p) { return p[0]; }).join('').slice(0, 2).toUpperCase(); }
+  // Jig: the first of your destinations is rate-limiting, so the Tasks module has something to show
+  function isDegraded(d) { return J().degraded && !d.canonical && d === state.destinations.filter(function (x) { return !x.canonical; })[0]; }
   function healthBadge(d) {
     if (d.canonical) return '<span class="p-badge p-badge--positive">Healthy</span>';
-    return d.health === 'degraded' ? '<span class="p-badge p-badge--caution">Degraded</span>' : '<span class="p-badge p-badge--positive">Healthy</span>';
+    return isDegraded(d) ? '<span class="p-badge p-badge--caution">Degraded</span>' : '<span class="p-badge p-badge--positive">Healthy</span>';
   }
   function moduleDestHealth() {
     return '<section class="p-card ob-module"><div class="ob-module__head"><h2 class="ob-module__title">Destination health</h2><a class="p-link" href="#/destinations">All destinations</a></div>' +
@@ -453,7 +491,7 @@
   let gdraft = null;
   function pageGroups(sub) {
     if (sub) return pageGroupForm(sub);
-    const shared = SCEN.landscape ? ' Groups are shared with Landscape: editing one in either place updates both.' : '';
+    const shared = J().landscape ? ' Groups are shared with Landscape: editing one in either place updates both.' : '';
     let html = header('Groups', 'Groups', 'Saved queries that decide which devices a connector applies to. A group sends nothing on its own.' + shared,
       state.connected ? '<a class="p-button p-button--positive" href="#/groups/new">Create group</a>' : '');
     html += banner('group');
@@ -490,7 +528,7 @@
       html += '<fieldset class="ob-kind"><legend class="ob-label">Membership</legend>' +
         '<label class="ob-radio-card' + (gdraft.kind === 'dynamic' ? ' is-on' : '') + '"><input type="radio" name="kind" value="dynamic"' + (gdraft.kind === 'dynamic' ? ' checked' : '') + '> <span><strong>Dynamic</strong>These devices and any device that matches later are added automatically.</span></label>' +
         '<label class="ob-radio-card' + (gdraft.kind === 'static' ? ' is-on' : '') + '"><input type="radio" name="kind" value="static"' + (gdraft.kind === 'static' ? ' checked' : '') + '> <span><strong>Static</strong>Exactly these devices. New devices are never added, and members stay even if they stop matching.</span></label></fieldset>';
-      if (SCEN.landscape) html += '<p class="ob-hint">This group is shared with Landscape. Editing it in either place updates both.</p>';
+      if (J().landscape) html += '<p class="ob-hint">This group is shared with Landscape. Editing it in either place updates both.</p>';
       html += '<div class="ob-form__actions"><a class="p-button" href="#/groups">Cancel</a><button type="submit" class="p-button p-button--positive">' + (g ? 'Save changes' : 'Save group') + '</button></div>';
     }
     html += '</form><aside class="p-card ob-preview" id="g-preview" aria-live="polite">' + groupPreview() + '</aside></div>';
@@ -648,7 +686,7 @@
     const c = document.querySelector('input[name="' + prefix + 'cls"]:checked'); dd.cls = c ? c.value : dd.cls;
   }
   function newDest(dd) {
-    const d = { id: uid('d'), name: dd.name.trim(), type: dd.type, endpoint: dd.endpoint, cls: dd.cls, region: dd.region, by: ME, at: now(), health: dd.type === 'Datadog' ? 'degraded' : 'healthy' };
+    const d = { id: uid('d'), name: dd.name.trim(), type: dd.type, endpoint: dd.endpoint, cls: dd.cls, region: dd.region, by: ME, at: now() };
     state.destinations.push(d); log('added destination <strong>' + esc(d.name) + '</strong> (' + CLASSES[d.cls] + ')');
     return d;
   }
@@ -810,15 +848,90 @@
       state.users.map(function (u) { return '<tr><td>' + esc(u.name || '–') + '</td><td>' + esc(u.email) + '</td><td>' + esc(u.role) + '</td><td>' + (u.status === 'invited' ? '<span class="p-badge p-badge--caution">Invited</span>' : 'Active') + '</td></tr>'; }).join('') +
       '</tbody></table><form class="ob-invite" id="invite-form" novalidate><label class="ob-label" for="inv-email">Invite by email</label><div class="ob-invite__row"><input class="ob-input" id="inv-email" type="email" placeholder="name@example.com" autocomplete="off">' +
       '<select class="p-select" id="inv-role" aria-label="Role"><option>Admin</option><option>Operator</option><option>Viewer</option></select><button type="submit" class="p-button p-button--positive">Invite</button></div><p class="ob-error" id="inv-err" hidden>Enter a valid email address.</p></form></section>';
-    html += '<section class="p-card ob-module"><div class="ob-module__head"><h2 class="ob-module__title">Landscape</h2></div><p>' + (SCEN.landscape ? 'Linked to <strong>landscape.example.com</strong>. Groups are shared between Landscape and telemetry.' : 'Not linked. Linking Landscape lets you connect devices from Landscape in one step and share groups.') + '</p></section>';
-    html += '<section class="p-card ob-module ob-demo-panel"><div class="ob-module__head"><h2 class="ob-module__title">Demo scenario</h2><span class="p-badge">Prototype only</span></div>' +
-      '<form id="demo-form" class="ob-demo-form"><label class="p-field"><span class="p-field__label">Fleet</span><select class="p-select" id="demo-fleet">' +
-      [['zero', 'No devices yet'], ['hobby', 'Home lab (6)'], ['mid', 'Mid-size (38)'], ['enterprise', 'Enterprise (5,000)']].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === SCEN.fleet ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>' +
-      '<label class="ob-check"><input type="checkbox" id="demo-ls"' + (SCEN.landscape ? ' checked' : '') + '> Landscape linked</label>' +
-      '<label class="ob-check"><input type="checkbox" id="demo-joiner"' + (SCEN.joiner ? ' checked' : '') + '> Joining after a colleague started setup</label>' +
-      '<button type="submit" class="p-button">Switch scenario</button><button type="button" class="p-link p-link--negative" data-act="reset">Reset this scenario</button>' +
-      '<button type="button" class="p-link" data-act="skip-ahead">' + (state.skipAhead ? 'Back to day 0' : 'Skip ahead 7 days') + '</button></form></section>';
+    html += '<section class="p-card ob-module"><div class="ob-module__head"><h2 class="ob-module__title">Landscape</h2></div><p>' + (J().landscape ? 'Linked to <strong>landscape.example.com</strong>. Groups are shared between Landscape and telemetry.' : 'Not linked. Linking Landscape lets you connect devices from Landscape in one step and share groups.') + '</p></section>';
+    html += '<p class="ob-hint">Demo controls are in the jig drawer on the right.</p>';
     return html;
+  }
+
+
+  // ---- Jig drawer (prototype controls) ---------------------------------
+  const ORDER = ['connect', 'about', 'group', 'policy', 'connector', 'flow'];
+  function complete(step) {
+    if (step === 'connect') { state.connected = true; state.connectedAt = now(); log(J().landscape ? 'pointed <strong>' + n(ALL.length) + ' devices</strong> at telemetry from Landscape' : 'connected the first device'); }
+    else if (step === 'about') { state.intents = ['cost', 'monitoring']; state.primary = 'monitoring'; state.aboutDone = true; }
+    else if (step === 'group' && !userGroups().length) { state.groups.push({ id: 'g-large', name: 'Large servers', kind: 'dynamic', query: [{ attr: 'ram', op: 'gte', val: '32' }], members: null, by: ME, at: now() }); log('created group <strong>Large servers</strong> (dynamic)'); }
+    else if (step === 'policy' && !state.policies.length) state.policies.push({ id: 'p-reduce', name: 'Reduce volume', template: 'cost', purpose: 'analytic', rules: { sample: 50, dropDebug: true, metricsOnly: false, redact: false }, by: ME, at: now() }), log('created policy <strong>Reduce volume</strong>');
+    else if (step === 'connector' && !userConnectors().length) {
+      state.destinations.push({ id: 'd-datadog', name: 'Datadog EU', type: 'Datadog', cls: 'external', region: 'EU', endpoint: '', by: ME, at: now() });
+      const g = userGroups()[0] || groupById('all');
+      state.connectors.push({ id: 'c-first', name: g.name + ' to Datadog', group: g.id, policy: state.policies[0].id, dest: 'd-datadog', by: ME, at: now() });
+      state.firstConnector = 'c-first';
+      log('activated connector <strong>' + esc(g.name) + ' to Datadog</strong> (' + esc(g.name) + ' → Datadog EU, External)');
+    } else if (step === 'flow') state.flowSeen = true;
+  }
+  function fillTo(stepId) {
+    const jig = state.jig, wasJoiner = jig.joiner, ana = { group: anaHas(state, 'group'), policy: anaHas(state, 'policy'), connector: anaHas(state, 'connector') };
+    state = fresh(); state.jig = jig; setJoiner(state, false);
+    if (wasJoiner) { setJoiner(state, true); ['group', 'policy', 'connector'].forEach(function (k) { if (ana[k]) setAna(state, k, true); }); }
+    const upto = stepId === 'done' ? ORDER.length : ORDER.indexOf(stepId);
+    for (let i = 0; i < upto; i++) complete(ORDER[i]);
+    if (stepId === 'done') state.setupNoted = true;
+  }
+  function renderJig() {
+    const el = $('jig'); if (!el) return;
+    const cur = currentStep(), j = J();
+    const chk = function (id, on, label, hint, disabled) {
+      return '<label class="ob-jig__check' + (disabled ? ' is-disabled' : '') + '"><input type="checkbox" data-jig="' + id + '"' + (on ? ' checked' : '') + (disabled ? ' disabled' : '') + '><span>' + label + (hint ? '<small>' + hint + '</small>' : '') + '</span></label>';
+    };
+    const pending = state.users.some(function (u) { return u.status === 'invited'; });
+    el.innerHTML = '<div class="ob-jig__head"><h2 class="ob-jig__title">Jig</h2><button type="button" class="p-icon-button" data-jig="close" aria-label="Close jig">✕</button></div>' +
+      '<p class="ob-jig__now">' + (cur ? 'Now on step ' + stepNo(cur.id) + ' of ' + STEPS.length + ': ' + esc(cur.title) : 'Setup complete') + '</p>' +
+      '<section class="ob-jig__sec"><h3>Scenario</h3>' +
+        '<label class="ob-jig__field"><span>Fleet size</span><select class="p-select" data-jig="fleet">' +
+        [['zero', 'No devices yet'], ['hobby', 'Home lab (6)'], ['mid', 'Mid-size (38)'], ['enterprise', 'Enterprise (5,000)']].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === SCEN.fleet ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>' +
+        chk('landscape', j.landscape, 'Landscape linked', 'Connect devices from Landscape, shared groups') + '</section>' +
+      '<section class="ob-jig__sec"><h3>Devices</h3>' +
+        chk('connected', state.connected, 'Devices connected', SCEN.fleet === 'zero' ? 'The empty fleet gets the mid-size devices' : null) +
+        chk('rejected', j.rejected, 'Server sees rejected attempts', 'Shown in the connection diagnostics') +
+        chk('optedOut', j.optedOut, 'Some devices opted out', 'Shown in diagnostics when Landscape is linked', !j.landscape) + '</section>' +
+      '<section class="ob-jig__sec"><h3>Who came before me</h3>' +
+        chk('joiner', j.joiner, 'Invited by ' + ANA, 'She is an admin; ' + TOM + ' approves external destinations') +
+        chk('ana-group', anaHas(state, 'group'), ANA + ' created a group', null, !j.joiner) +
+        chk('ana-policy', anaHas(state, 'policy'), ANA + ' created a policy', null, !j.joiner) +
+        chk('ana-connector', anaHas(state, 'connector'), ANA + ' created a connector', 'To an internal Splunk', !j.joiner) +
+        chk('pending', pending, 'An invitation is unanswered', 'Adds a task after setup') + '</section>' +
+      '<section class="ob-jig__sec"><h3>My progress</h3>' +
+        '<label class="ob-jig__field"><span>Start at</span><select class="p-select" data-jig="jump-to">' +
+        STEPS.map(function (st, i) { return '<option value="' + st.id + '"' + (cur && cur.id === st.id ? ' selected' : '') + '>Step ' + (i + 1) + ': ' + esc(st.title) + '</option>'; }).join('') +
+        '<option value="done"' + (!cur ? ' selected' : '') + '>Setup complete</option></select></label>' +
+        '<button type="button" class="p-button p-button--small" data-jig="jump">Go</button>' +
+        '<p class="ob-jig__hint">Fills in everything before that step as if you did it. Keeps the settings above.</p></section>' +
+      '<section class="ob-jig__sec"><h3>After setup</h3>' +
+        chk('skipAhead', state.skipAhead, '7 days of data', 'Insights need about 24 hours of data') +
+        chk('degraded', j.degraded, 'Your first destination is degraded', 'Adds a task and a Degraded badge') + '</section>' +
+      '<div class="ob-jig__foot"><button type="button" class="p-link p-link--negative" data-jig="reset">Reset everything</button></div>';
+  }
+  function setJigOpen(open) {
+    state.jig.open = open; save();
+    try { localStorage.setItem('tob.jigOpen', open ? '1' : ''); } catch (e) { /* private mode */ }
+    document.body.classList.toggle('jig-open', open);
+    $('jig').inert = !open;
+    $('jig-tab').setAttribute('aria-expanded', String(open));
+    if (open) renderJig();
+  }
+  function jigChange(el) {
+    const k = el.getAttribute('data-jig'), on = el.checked;
+    if (k === 'fleet') { location.href = location.pathname + '?fleet=' + el.value + location.hash; return; }
+    if (k === 'landscape' || k === 'rejected' || k === 'optedOut' || k === 'degraded') state.jig[k] = on;
+    else if (k === 'connected') { state.connected = on; waiting = false; }
+    else if (k === 'joiner') setJoiner(state, on);
+    else if (/^ana-/.test(k)) setAna(state, k.slice(4), on);
+    else if (k === 'pending') {
+      state.users = state.users.filter(function (u) { return u.status !== 'invited'; });
+      if (on) state.users.push({ name: '', email: 'sam@example.com', role: 'Operator', status: 'invited' });
+    } else if (k === 'skipAhead') state.skipAhead = on;
+    else return;
+    save(); render();
   }
 
   // ---- Toast -----------------------------------------------------------
@@ -839,6 +952,7 @@
     $('main').innerHTML = fn(r.sub);
     if (r.page === 'flow') drawFlow();
     document.title = ($('topbar-page').textContent || 'Overview') + ' · Telemetry';
+    renderJig();
   }
 
   // ---- Events ----------------------------------------------------------
@@ -851,8 +965,8 @@
       waiting = true; render();
       setTimeout(function () {
         waiting = false; state.connected = true; state.connectedAt = now();
-        log(SCEN.landscape ? 'pointed <strong>' + n(ALL.length) + ' devices</strong> at telemetry from Landscape' : 'connected the first device');
-        save(); toast(SCEN.landscape ? n(ALL.length) + ' devices connected' : 'First device connected'); render();
+        log(J().landscape ? 'pointed <strong>' + n(ALL.length) + ' devices</strong> at telemetry from Landscape' : 'connected the first device');
+        save(); toast(J().landscape ? n(ALL.length) + ' devices connected' : 'First device connected'); render();
       }, 2200);
     }
     else if (act === 'about-save') { state.aboutDone = true; if (!state.primary || state.intents.indexOf(state.primary) < 0) state.primary = state.intents[0]; save(); render(); }
@@ -922,6 +1036,18 @@
     }
   });
 
+  // Jig events
+  $('jig-tab').addEventListener('click', function () { setJigOpen(!state.jig.open); });
+  $('jig').addEventListener('change', function (e) { if (e.target.hasAttribute('data-jig') && e.target.getAttribute('data-jig') !== 'jump-to') jigChange(e.target); });
+  $('jig').addEventListener('click', function (e) {
+    const b = e.target.closest('button[data-jig]'); if (!b) return;
+    const k = b.getAttribute('data-jig');
+    if (k === 'close') { setJigOpen(false); $('jig-tab').focus(); }
+    else if (k === 'reset') { const open = state.jig.open; localStorage.removeItem(KEY); state = fresh(); state.jig.open = open; save(); render(); toast('Everything reset'); }
+    else if (k === 'jump') { fillTo($('jig').querySelector('[data-jig="jump-to"]').value); waiting = false; save(); go('overview'); render(); toast('Jumped'); }
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && state.jig.open && $('jig').contains(document.activeElement)) { setJigOpen(false); $('jig-tab').focus(); } });
+
   // Mobile navigation
   const navToggle = $('nav-toggle'), navOverlay = $('nav-overlay');
   function setNav(open) {
@@ -937,5 +1063,6 @@
   let rz = null;
   window.addEventListener('resize', function () { clearTimeout(rz); rz = setTimeout(function () { if (route().page === 'flow') drawFlow(); }, 150); });
   if (!location.hash) history.replaceState(null, '', '#/overview');
+  setJigOpen((function () { try { return !!localStorage.getItem('tob.jigOpen'); } catch (e) { return false; } })());
   render();
 })(window.TL);
