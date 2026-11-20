@@ -855,10 +855,10 @@
       '<div class="p-kpi"><div class="p-kpi__label">Delivered / day</div><div class="p-kpi__value">' + mb(t.delivered) + '</div><div class="p-kpi__sub">Can be higher than data leaving devices when a device sends to several destinations</div></div>' +
       '<div class="p-kpi"><div class="p-kpi__label">Dropped by shaping / day</div><div class="p-kpi__value">' + mb(t.dropped) + '</div></div></div>';
     if (list.length) html += '<details class="p-card ob-flowinsights"><summary>' + list.length + ' insight' + (list.length > 1 ? 's' : '') + ' available</summary><ul class="ob-list">' + list.map(function (i) { return '<li class="ob-insight"><span class="p-badge">' + i.who + '</span><div><strong>' + esc(i.title) + '</strong><p>' + i.body + '</p></div></li>'; }).join('') + '</ul></details>';
-    html += '<div class="p-toolbar ob-flowbar"><div class="p-field"><label class="p-field__label" for="flow-groupby">Group by</label><select id="flow-groupby" class="p-select">' +
-      '<option value="none"' + (flowGroupBy === 'none' ? ' selected' : '') + '>None (each device)</option><option value="group"' + (flowGroupBy === 'group' ? ' selected' : '') + '>Group</option></select></div>' +
-      '<div class="p-field"><label class="p-field__label" for="flow-colour">Colour by</label><select id="flow-colour" class="p-select">' +
-      COLOUR_BYS.map(function (c) { return '<option value="' + c.id + '"' + (c.id === flowColour ? ' selected' : '') + '>' + c.label + '</option>'; }).join('') + '</select></div></div>' +
+    const opt = function (list, cur) { return list.map(function (o) { return '<option value="' + o.id + '"' + (o.id === cur ? ' selected' : '') + '>' + o.label + '</option>'; }).join(''); };
+    html += '<div class="p-toolbar ob-flowbar">' +
+      '<div class="p-field"><label class="p-field__label" for="flow-devgroup">Group devices by</label><select id="flow-devgroup" class="p-select">' + opt(DEV_GROUPS, devGroupBy) + '</select></div>' +
+      '<div class="p-field"><label class="p-field__label" for="flow-destgroup">Group destinations by</label><select id="flow-destgroup" class="p-select">' + opt(DEST_GROUPS, destGroupBy) + '</select></div></div>' +
       '<p class="ob-ladder" id="flow-ladder" hidden></p>';
     html += '<div class="p-card insights__chart"><div class="chart-wrap"><div class="ob-legend" id="flow-legend"></div><svg id="flow-svg" class="sankey" role="img" aria-label="Sankey diagram of data flow"></svg></div>' +
       '<div class="ob-key" id="flow-key"></div></div>' +
@@ -868,34 +868,19 @@
   }
   // Column 1 is every device by default. Like the Insights prototype: up to 15 devices are all shown,
   // 16 to 30 get a nudge to group, and above 30 the top 20 by volume are shown plus "Others".
-  let flowGroupBy = 'none';
-  // Colour comes from a view, as in Insights: Neutral by default, or a device attribute carried end to end.
-  // "Where data ends up" colours by outcome and is an explicit choice, not the default.
+  // Both ends of the Sankey can be grouped. Flows are monochrome; click a node to trace its path.
+  const DEV_GROUPS = [{ id: 'none', label: 'None (each device)' }, { id: 'group', label: 'Group' }, { id: 'site', label: 'Site' }, { id: 'region', label: 'Region' }, { id: 'type', label: 'Device type' }, { id: 'release', label: 'Ubuntu release' }];
+  const DEST_GROUPS = [{ id: 'none', label: 'None (each destination)' }, { id: 'cls', label: 'Receiver' }, { id: 'type', label: 'Type' }, { id: 'region', label: 'Region' }];
+  let devGroupBy = 'none', destGroupBy = 'none';
+  // Monochrome: one flow colour. Canonical nodes keep their orange bars.
   const NEUTRAL = '#4C6E87', ORANGE = '#E95420';
-  const VIEW_COLOURS = ['#4C6E87', '#C08A2E', '#5E9A5A', '#8A64A8', '#B4505E', '#3C9B9B', '#7A7A3A', '#A0607A'];
-  const COLOUR_BYS = [
-    { id: 'neutral', label: 'Neutral' }, { id: 'site', label: 'Site' }, { id: 'region', label: 'Region' },
-    { id: 'type', label: 'Device type' }, { id: 'release', label: 'Ubuntu release' }, { id: 'outcome', label: 'Where data ends up' }
-  ];
-  let flowColour = 'neutral';
-  function colourValue(f) {
-    if (flowColour === 'neutral') return 'all';
-    if (flowColour === 'outcome') return f.kind;
-    const v = ALL_BY_ID[f.dev].attrs[flowColour]; return v == null ? 'none' : v;
-  }
-  function colourPalette(facts) {
-    if (flowColour === 'neutral') return [{ id: 'all', color: NEUTRAL, label: 'All data' }];
-    if (flowColour === 'outcome') return [{ id: 'canonical', color: ORANGE, label: 'Update traffic' }, { id: 'customer', color: NEUTRAL, label: 'Delivered to your destinations' }, { id: 'dropped', color: '#B8B8B8', label: 'Dropped by shaping' }];
-    const seen = {}; facts.forEach(function (f) { seen[colourValue(f)] = 1; });
-    const order = (TL.ATTRIBUTES[flowColour] || { values: [] }).values.map(function (v) { return v.id; });
-    return Object.keys(seen).sort(function (a, b) { return (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99); })
-      .map(function (id, i) { return { id: id, color: VIEW_COLOURS[i % VIEW_COLOURS.length], label: id === 'none' ? 'Not set' : attrLabel(flowColour, id) }; });
-  }
+  function colourValue() { return 'all'; }
+  function colourPalette() { return [{ id: 'all', color: NEUTRAL, label: 'Data' }]; }
   function drawFlow() {
     const svg = $('flow-svg'); if (!svg) return;
     const facts = flows();
     const first = /first=1/.test(location.hash) ? state.firstConnector : null;
-    const grouped = flowGroupBy === 'group';
+    const grouped = devGroupBy !== 'none';
     // rank devices by volume for the top 20
     // rank by data from snaps first (what connectors send), then by update traffic
     const devTot = {}, devCust = {};
@@ -904,22 +889,42 @@
     const top = ranked.length > 30 ? ranked.slice(0, 20) : ranked, inTop = {};
     top.forEach(function (id) { inTop[id] = 1; });
     const others = ranked.length - top.length;
-    const srcOf = function (f) { return grouped ? 'g:' + f.grp : inTop[f.dev] ? 'd:' + f.dev : '__others'; };
+    const srcOf = function (f) {
+      if (devGroupBy === 'group') return 'g:' + f.grp;
+      if (grouped) { const v = ALL_BY_ID[f.dev].attrs[devGroupBy]; return 'a:' + (v == null ? 'none' : v); }
+      return inTop[f.dev] ? 'd:' + f.dev : '__others';
+    };
+    const destOf = function (f) {
+      if (destGroupBy === 'none' || f.dest === '__dropped') return f.dest;
+      const d = destById(f.dest); return 'x:' + (destGroupBy === 'cls' ? d.cls : d[destGroupBy] || 'none');
+    };
     const ids = { src: [], pub: [], pol: [], dest: [] }, seen = { src: {}, pub: {}, pol: {}, dest: {} };
     const add = function (k, v) { if (!seen[k][v]) { seen[k][v] = 1; ids[k].push(v); } };
     if (!grouped) top.forEach(function (id) { add('src', 'd:' + id); });
-    facts.forEach(function (f) { add('src', srcOf(f)); add('pub', f.pub); add('pol', f.pol); add('dest', f.dest); });
+    facts.forEach(function (f) { add('src', srcOf(f)); add('pub', f.pub); add('pol', f.pol); add('dest', destOf(f)); });
     const rank = function (x, last) { return last.indexOf(x) >= 0 ? 1 + last.indexOf(x) : 0; };
     ids.pub.sort(function (a, b) { return rank(a, ['__snapd']) - rank(b, ['__snapd']) || snapLabel(a).localeCompare(snapLabel(b)); });
     ids.pol.sort(function (a, b) { return rank(a, ['none', 'updates']) - rank(b, ['none', 'updates']); });
-    ids.dest.sort(function (a, b) { return rank(a, ['store', '__dropped']) - rank(b, ['store', '__dropped']); });
+    ids.dest.sort(function (a, b) { return rank(a, ['store', 'x:canonical', '__dropped']) - rank(b, ['store', 'x:canonical', '__dropped']); });
     function dim(label, list, lab) { const values = list.map(function (id) { return { id: id, label: lab(id) }; }); const index = {}; values.forEach(function (v, i) { index[v.id] = i; }); return { label: label, values: values, index: index }; }
-    TL.DIMENSIONS.ob_src = dim(grouped ? 'Group' : 'Device', ids.src, function (id) { return id === '__others' ? 'Others (' + n(others) + ' devices)' : id[0] === 'd' ? id.slice(2) : groupById(id.slice(2)).name; });
+    const devLabel = (DEV_GROUPS.filter(function (o) { return o.id === devGroupBy; })[0] || {}).label;
+    TL.DIMENSIONS.ob_src = dim(grouped ? devLabel : 'Device', ids.src, function (id) {
+      if (id === '__others') return 'Others (' + n(others) + ' devices)';
+      if (id[0] === 'd') return id.slice(2);
+      if (id[0] === 'g') return groupById(id.slice(2)).name;
+      return id.slice(2) === 'none' ? 'Not set' : attrLabel(devGroupBy, id.slice(2));
+    });
     TL.DIMENSIONS.ob_pub = dim('Publisher (snap)', ids.pub, function (id) { return id === '__snapd' ? 'snapd (updates)' : snapLabel(id); });
     TL.DIMENSIONS.ob_pol = dim('Policy', ids.pol, function (id) { return id === 'updates' ? 'Update traffic' : id === 'none' ? 'No shaping' : policyById(id).name; });
-    TL.DIMENSIONS.ob_dest = dim('Destination', ids.dest, function (id) { return id === '__dropped' ? 'Dropped by shaping' : destById(id).name; });
+    const destLabel = { none: 'Destination', cls: 'Receiver', type: 'Destination type', region: 'Destination region' }[destGroupBy];
+    TL.DIMENSIONS.ob_dest = dim(destLabel, ids.dest, function (id) {
+      if (id === '__dropped') return 'Dropped by shaping';
+      if (id.slice(0, 2) !== 'x:') return destById(id).name;
+      const v = id.slice(2);
+      return destGroupBy === 'cls' ? (CLASSES[v] || v) : v === 'none' ? 'Not set' : v;
+    });
     const tot = facts.reduce(function (sum, f) { return sum + f.count; }, 0), gb = tot > 5000;
-    const mapped = facts.map(function (f) { return { ob_src: srcOf(f), ob_pub: f.pub, ob_pol: f.pol, ob_dest: f.dest, count: gb ? f.count / 1000 : f.count, kind: f.kind, colour: colourValue(f), conn: f.conn }; });
+    const mapped = facts.map(function (f) { return { ob_src: srcOf(f), ob_pub: f.pub, ob_pol: f.pol, ob_dest: destOf(f), count: gb ? f.count / 1000 : f.count, kind: f.kind, colour: colourValue(f), conn: f.conn }; });
     const stages = ['ob_src', 'ob_pub', 'ob_pol', 'ob_dest'];
     const focus = first ? function (f) { return f.conn === first || f.kind === 'canonical'; } : flowFocus ? function (f) { return f[flowFocus.dim] === flowFocus.val; } : null;
     const agg = S.aggregate(mapped, stages, { segAttr: 'colour', focus: focus });
@@ -971,20 +976,20 @@
       });
     });
     // Canonical nodes keep their orange in every view
-    ['ob_pub:__snapd', 'ob_pol:updates', 'ob_dest:store'].forEach(function (id) {
+    ['ob_pub:__snapd', 'ob_pol:updates', 'ob_dest:store', 'ob_dest:x:canonical'].forEach(function (id) {
       const g = svg.querySelector('.sk-node[data-node="' + id + '"]'); if (!g) return;
       g.querySelectorAll('.sk-node__seg').forEach(function (r) { r.style.fill = ORANGE; });
       const bar = g.querySelector('.sk-node__bar'); if (bar) bar.style.fill = ORANGE;
     });
     $('flow-key').innerHTML = PAL.map(function (pp) { return '<span><i class="ob-key__sw" style="background:' + pp.color + '"></i>' + esc(pp.label) + '</span>'; }).join('') +
-      (flowColour === 'outcome' ? '' : '<span><i class="ob-key__sw" style="background:' + ORANGE + '"></i>Canonical node</span>');
+      '<span><i class="ob-key__sw" style="background:' + ORANGE + '"></i>Canonical node</span><span>Click a node to trace its path</span>';
     const cols = stages.map(function (st, i) { const node = L.nodes.filter(function (x) { return x.col === i; })[0]; return node ? '<span style="left:' + node.x + 'px">' + TL.DIMENSIONS[st].label + '</span>' : ''; });
     $('flow-legend').innerHTML = cols.join('');
     const note = $('flow-ladder');
     if (note) {
       note.hidden = grouped || ranked.length <= 15;
-      note.innerHTML = ranked.length > 30 ? 'Showing the 20 devices sending the most. The other ' + n(others) + ' are in Others. <button type="button" class="p-link" data-act="flow-group">Group by group</button>'
-        : 'As your fleet grows, group devices to keep this view readable. <button type="button" class="p-link" data-act="flow-group">Group by group</button>';
+      note.innerHTML = ranked.length > 30 ? 'Showing the 20 devices sending the most. The other ' + n(others) + ' are in Others. <button type="button" class="p-link" data-act="flow-group">Group devices by site</button>'
+        : 'As your fleet grows, group devices to keep this view readable. <button type="button" class="p-link" data-act="flow-group">Group devices by site</button>';
     }
     svg.querySelectorAll('.sk-node').forEach(function (g) {
       g.addEventListener('click', function () {
@@ -1137,7 +1142,7 @@
       pdraft = { id: 'new', template: t.id, name: t.id === 'custom' ? '' : t.name, purpose: t.purpose, rules: Object.assign({}, t.rules) }; render();
     }
     else if (act === 'tpl-back') { pdraft.template = null; render(); }
-    else if (act === 'flow-group') { flowGroupBy = 'group'; $('flow-groupby').value = 'group'; drawFlow(); }
+    else if (act === 'flow-group') { devGroupBy = 'site'; $('flow-devgroup').value = 'site'; drawFlow(); }
   });
   main.addEventListener('change', function (e) {
     const el = e.target;
@@ -1152,8 +1157,8 @@
       if (k === 'attr') { const a = QA[el.value]; row.op = a.numeric ? 'gte' : 'is'; row.val = a.numeric ? '32' : a.values[0].id; $('q-rows').innerHTML = queryRows(); }
       $('g-preview').innerHTML = groupPreview();
     } else if (el.name === 'kind') { gdraft.kind = el.value; main.querySelectorAll('.ob-radio-card').forEach(function (c) { c.classList.toggle('is-on', c.querySelector('input').checked); }); $('g-preview').innerHTML = groupPreview(); }
-    else if (el.id === 'flow-groupby') { flowGroupBy = el.value; drawFlow(); }
-    else if (el.id === 'flow-colour') { flowColour = el.value; drawFlow(); }
+    else if (el.id === 'flow-devgroup') { devGroupBy = el.value; flowFocus = null; drawFlow(); }
+    else if (el.id === 'flow-destgroup') { destGroupBy = el.value; flowFocus = null; drawFlow(); }
     else if (el.id === 'p-purpose') pdraft.purpose = el.value;
     else if (el.id && /^p-(dropDebug|metricsOnly|redact)$/.test(el.id)) { pdraft.rules[el.id.slice(2)] = el.checked; $('p-preview').innerHTML = policyPreview(); }
     else if (el.id === 'c-group' || el.id === 'c-policy' || el.id === 'c-dest') {
