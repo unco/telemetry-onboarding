@@ -46,7 +46,7 @@ Overview (home) · Groups · Policies · Connectors · Destinations · Data flow
 
 ## Data flow
 
-Data flow is drawn from the onboarding state with the Insights prototype's `sankey.js`, with the same columns: device → publisher (snap) → policy → destination. It starts ungrouped, one node per device, following the Insights ladder (up to 15 devices all shown, 16 to 30 a nudge to group, above 30 the top 20 plus Others). **Group by › Group** collapses column 1 to the connector groups. Update traffic comes from snapd on every device. Widths are volume. Update traffic is orange, your data is blue-grey, and data dropped by shaping is grey. After the first connector, its path is highlighted. Click a node to trace its path.
+Data flow is drawn from the onboarding state with the Insights prototype's `sankey.js`, with the same columns: device → publisher (snap) → policy → destination. It starts ungrouped, one node per device, following the Insights ladder (up to 15 devices all shown, 16 to 30 a nudge to group, above 30 the top 20 plus Others). **Group by › Group** collapses column 1 to the connector groups. Update traffic comes from snapd on every device. **Colour by** works like the Insights views: it starts on Neutral (one flow colour), or carries a device attribute (site, region, device type, Ubuntu release) end to end. "Where data ends up" colours by outcome (update traffic, delivered, dropped) as an explicit option. Canonical nodes (snapd, update traffic, Canonical Snap Store) are orange in every view. Widths are volume. After the first connector, its path is highlighted. Click a node to trace its path.
 
 `insights/` is a copy of the full Insights prototype (demo data) with this app's menu, linked from Data flow.
 
