@@ -349,13 +349,10 @@
     { id: 'connector', title: 'Send data somewhere', route: 'connectors',
       why: 'A connector joins a group, a policy and a destination. This is the point where data leaves your devices.',
       done: function () { return userConnectors().length > 0; },
-      doneBy: function () { const c = userConnectors()[0]; return c && c.by !== ME ? c.by : null; } },
-    { id: 'flow', title: 'See it in Data flow', route: 'flow',
-      why: 'Watch your data move from devices, through your policy, to its destination.',
-      done: function () { return state.flowSeen; } }
+      doneBy: function () { const c = userConnectors()[0]; return c && c.by !== ME ? c.by : null; } }
   ];
   function currentStep() { return STEPS.filter(function (s) { return !s.done(); })[0] || null; }
-  function setupComplete() { return !currentStep(); }
+  function setupComplete() { return !currentStep() && (J().layout === 'list' || !wizStep()); }
   const CONNECT_I = STEPS.map(function (s) { return s.id; }).indexOf('connect');
   function stepNo(id) { return STEPS.map(function (s) { return s.id; }).indexOf(id) + 1; }
 
@@ -484,13 +481,13 @@
     connect: { label: 'Devices', icon: '▣' },
     group: { label: 'Groups', icon: '▦', cta: 'Go to Groups', another: 'Create another group', anotherHref: '#/groups/new' },
     policy: { label: 'Policy', icon: '≡', cta: 'Go to Policies', another: 'Create another policy', anotherHref: '#/policies/new' },
-    connector: { label: 'Connector', icon: '⇄', cta: 'Go to Connectors', another: 'Add another connector', anotherHref: '#/connectors/new' },
-    flow: { label: 'Data flow', icon: '⇶', cta: 'Open Data flow' }
+    connector: { label: 'Connector', icon: '⇄', cta: 'Go to Connectors', another: 'Add another connector', anotherHref: '#/connectors/new' }
   };
   function acked(id) { return (state.wizAck || []).indexOf(id) >= 0; }
   function ack(id) { if (!state.wizAck) state.wizAck = []; if (!acked(id)) state.wizAck.push(id); }
   function stepById(id) { return STEPS.filter(function (s) { return s.id === id; })[0]; }
-  function wizStep() { return STEPS.filter(function (s) { return !s.done() || (s.id !== 'flow' && !acked(s.id)); })[0] || null; }
+  function selfFinal(s) { return s === STEPS[STEPS.length - 1] && !(s.doneBy && s.doneBy()); }
+  function wizStep() { return STEPS.filter(function (s) { return !s.done() || (!selfFinal(s) && !acked(s.id)); })[0] || null; }
   function lastOf(list) { return list[list.length - 1]; }
   function byLine(o) { return (o.by === ME ? 'Created by you' : 'Created by ' + esc(o.by)) + (o.at ? ', ' + ago(o.at) : ''); }
 
@@ -504,7 +501,7 @@
       '<span class="ob-progress">Step ' + (wi + 1) + ' of ' + STEPS.length + '</span></div>';
     if (J().joiner) html += '<p class="ob-intro"><strong>' + ANA + ' invited you and has started setting up.</strong> Steps she has done show her name.</p>';
     html += '<ol class="ob-wiz__bar">' + STEPS.map(function (st, k) {
-      const done = st.done() && (acked(st.id) || st.id === 'flow'), cur = k === wi, view = st === s;
+      const done = st.done() && (acked(st.id) || selfFinal(st)), cur = k === wi, view = st === s;
       const cls = 'ob-wiz__seg' + (done ? ' is-done' : '') + (cur ? ' is-current' : '') + (view ? ' is-viewing' : '');
       const lab = esc(WIZ[st.id].label);
       return '<li>' + (done && !cur
@@ -563,7 +560,7 @@
     if (!another && m.another) another = '<a class="p-link" href="' + m.anotherHref + '">' + m.another + '</a>';
     const primary = reviewing
       ? '<button type="button" class="p-button" data-act="wiz-back">Back to step ' + (STEPS.indexOf(wizStep()) + 1) + '</button>'
-      : '<button type="button" class="p-button p-button--positive" data-act="wiz-next" data-id="' + s.id + '">Next</button>';
+      : '<button type="button" class="p-button p-button--positive" data-act="wiz-next" data-id="' + s.id + '">' + (s === STEPS[STEPS.length - 1] ? 'Finish setup' : 'Next') + '</button>';
     return '<span class="ob-wiz__icon is-done" aria-hidden="true">✓</span><h3 class="ob-wiz__title">' + title + '</h3>' +
       '<div class="ob-wiz__summary">' + lines.map(function (l) { return '<p>' + l + '</p>'; }).join('') + '</div>' +
       '<div class="ob-step__cta ob-wiz__cta">' + primary + another + '</div>';
@@ -1338,7 +1335,7 @@
 
 
   // ---- Jig drawer (prototype controls) ---------------------------------
-  const ORDER = ['about', 'connect', 'group', 'policy', 'connector', 'flow'];
+  const ORDER = ['about', 'connect', 'group', 'policy', 'connector'];
   function complete(step) {
     if (step === 'connect') { state.connected = true; state.connectedAt = now(); log(J().landscape ? 'pointed <strong>' + n(ALL.length) + ' devices</strong> at telemetry from Landscape' : 'connected the first device'); }
     else if (step === 'about') { state.intents = ['cost', 'monitoring']; state.primary = 'monitoring'; state.aboutDone = true; }
@@ -1359,7 +1356,7 @@
     const upto = stepId === 'done' ? ORDER.length : ORDER.indexOf(stepId);
     for (let i = 0; i < upto; i++) complete(ORDER[i]);
     state.wizAck = ORDER.slice(0, upto);
-    if (stepId === 'done') state.setupNoted = true;
+    if (stepId === 'done') { state.setupNoted = true; state.flowSeen = true; }
   }
   function renderJig() {
     const el = $('jig'); if (!el) return;

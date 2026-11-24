@@ -211,7 +211,7 @@ body.jig-open .ob-jig { transform: none; }
 
 /* Overview wizard ---------------------------------------------------------- */
 .ob-wiz { max-width: none; padding: 24px 32px; display: flex; flex-direction: column; min-height: calc(100vh - 170px); }
-.ob-wiz__bar { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; list-style: none; margin: 12px 0 0; padding: 0; }
+.ob-wiz__bar { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; list-style: none; margin: 12px 0 0; padding: 0; }
 .ob-wiz__seg { display: flex; flex-direction: column; gap: 6px; width: 100%; font: inherit; font-size: .75rem; line-height: 1.2; color: var(--faint); border: 0; background: none; padding: 0; text-align: left; }
 .ob-wiz__seg::before { content: ""; display: block; height: 4px; background: var(--border); }
 .ob-wiz__seg.is-done { color: var(--muted); }
