@@ -217,9 +217,9 @@ body.jig-open .ob-jig { transform: none; }
 .ob-wiz__seg.is-done { color: var(--muted); }
 button.ob-wiz__seg { cursor: pointer; }
 button.ob-wiz__seg:hover { color: var(--ink); text-decoration: underline; }
-.ob-wiz__seg.is-done::before { background: var(--positive); }
+.ob-wiz__seg.is-done::before { background: #529C8E; }
 .ob-wiz__seg.is-current { color: var(--ink); font-weight: 500; }
-.ob-wiz__seg.is-current::before { background: var(--ink); }
+.ob-wiz__seg.is-current::before { background: #529C8E; }
 .ob-wiz__seg.is-viewing:not(.is-current)::before { background: var(--link); }
 .ob-wiz__panel { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 56px 0; }
 .ob-wiz__panel > * { max-width: 100%; }
@@ -254,3 +254,5 @@ button.ob-wiz__seg:hover { color: var(--ink); text-decoration: underline; }
 .ob-wiz .ob-intents { border: 0; padding: 0; margin: 0 0 12px; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
 .ob-wiz .ob-intents legend { width: 100%; text-align: center; margin-bottom: 8px; }
 .ob-wiz .ob-step__cta { justify-content: center; }
+.ob-wiz .p-button--positive { background: #000; border-color: #000; color: #fff; }
+.ob-wiz .p-button--positive:hover { background: #333; border-color: #333; }
