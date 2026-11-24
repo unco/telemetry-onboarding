@@ -121,8 +121,8 @@
       destinations: [{ id: 'store', name: 'Canonical Snap Store', type: 'Snap Store', cls: 'canonical', region: 'Global', canonical: true, by: 'System', at: now() }],
       connectors: [{ id: 'store', name: 'Updates', group: 'all', policy: null, dest: 'store', canonical: true, by: 'System', at: now() }],
       changes: [], users: [{ name: ME, email: 'hayden@example.com', role: 'Admin', status: 'active' }],
-      flowSeen: false, firstConnector: null, age: 0, introSeen: false, setupNoted: false,
-      jig: { landscape: params.get('landscape') !== '0', joiner: false, rejected: true, optedOut: true, degraded: true, open: false }
+      flowSeen: false, aboutSkipped: false, wizAck: [], firstConnector: null, age: 0, introSeen: false, setupNoted: false,
+      jig: { landscape: params.get('landscape') !== '0', joiner: false, rejected: true, optedOut: true, degraded: true, open: false, layout: 'wizard' }
     };
     if (params.get('joiner') === '1') { setJoiner(s, true); setAna(s, 'group', true); }
     return s;
@@ -332,12 +332,12 @@
   function userGroups() { return state.groups.filter(function (g) { return !g.system; }); }
   function userConnectors() { return state.connectors.filter(function (c) { return !c.canonical; }); }
   const STEPS = [
-    { id: 'connect', title: 'Connect your first device', route: null,
-      why: 'Telemetry needs at least one device sending to it. Everything else depends on this.',
-      done: function () { return state.connected; } },
     { id: 'about', title: 'About you', route: null,
-      why: 'Tell us what you want to do first so the next steps start from the right templates.',
+      why: 'Tell us what you want to do first so the policy templates start in the right order. You can skip this.',
       done: function () { return state.aboutDone; } },
+    { id: 'connect', title: 'Connect your devices', route: null,
+      why: 'Telemetry needs devices sending to it. Every step after this depends on it.',
+      done: function () { return state.connected; } },
     { id: 'group', title: 'Choose which devices', route: 'groups',
       why: 'A group is a saved query, for example every device with at least 32 GB of RAM. It decides which devices a connector applies to, but on its own it sends nothing.',
       done: function () { return userGroups().length > 0 || state.useAll; },
@@ -356,6 +356,7 @@
   ];
   function currentStep() { return STEPS.filter(function (s) { return !s.done(); })[0] || null; }
   function setupComplete() { return !currentStep(); }
+  const CONNECT_I = STEPS.map(function (s) { return s.id; }).indexOf('connect');
   function stepNo(id) { return STEPS.map(function (s) { return s.id; }).indexOf(id) + 1; }
 
   // ---- Router ----------------------------------------------------------
@@ -401,6 +402,12 @@
     const cur = currentStep();
     if (!s || !state.connected) return '';
     const by = s.done() && s.doneBy && s.doneBy();
+    if (J().layout !== 'list' && s.done() && !by && !acked(stepId)) {
+      const made = { group: 'Group created.', policy: 'Policy created.', connector: 'Connector created.' }[stepId];
+      if (made) return '<div class="ob-banner ob-banner--success" role="region" aria-label="Setup"><span class="ob-banner__step">Step ' + stepNo(stepId) + ' of ' + STEPS.length + '</span>' +
+        '<p class="ob-banner__text"><strong>' + made + '</strong> Go back to setup to check it and move on.</p>' +
+        '<div class="ob-banner__actions"><a class="p-button p-button--small" href="#/overview">Back to setup</a></div></div>';
+    }
     if (s.done() && !by) return '';
     if (!by && cur.id !== stepId) return '';
     const total = STEPS.length;
@@ -410,7 +417,7 @@
       body = '<strong>' + what + ', created by ' + esc(by) + '.</strong> Use it or add your own.';
     } else if (stepId === 'group') {
       body = '<strong>Create your first group.</strong> Build a query, check which devices match, then save it as static or dynamic.' +
-        (state.connected ? ' <button type="button" class="p-link" data-act="use-all">Or use All devices</button>' : '');
+        (state.connected ? ' <button type="button" class="p-link" data-act="use-all">Skip, use all devices</button>' : '');
     } else if (stepId === 'policy') {
       body = '<strong>Create your first policy.</strong> Start from a template' + (state.primary ? ' (we put the ones for “' + esc(INTENTS.filter(function (i) { return i.id === state.primary; })[0].label.toLowerCase()) + '” first)' : '') + ' and check the data before and after.';
     } else if (stepId === 'connector') {
@@ -420,14 +427,14 @@
       '<span class="ob-banner__step">Step ' + stepNo(stepId) + ' of ' + total + '</span>' +
       '<p class="ob-banner__text">' + body + '</p>' +
       '<div class="ob-banner__actions">' + (by ? '<a class="p-button p-button--small" href="#/overview">Continue</a>' : '') +
-      '<a class="p-link" href="#/overview">Back to onboarding</a></div></div>';
+      '<a class="p-link" href="#/overview">Back to setup</a></div></div>';
   }
 
   // ---- Overview --------------------------------------------------------
   function pageOverview() {
     const done = setupComplete();
     let html = header('Overview', 'Overview', done ? 'What needs your attention across your fleet.' : null);
-    if (!done) html += moduleOnboarding();
+    if (!done) html += J().layout === 'list' ? moduleOnboarding() : moduleWizard();
     else {
       if (!state.setupNoted) html += '<div class="ob-note"><p><strong>Setup complete.</strong> From now on this page shows what needs your attention. Onboarding is no longer listed.</p><button type="button" class="p-link" data-act="dismiss-setup">Dismiss</button></div>';
       html += '<div class="ob-grid">' + moduleTasks() + moduleInsights() + moduleChanges() + moduleDestHealth() + '</div>';
@@ -446,7 +453,7 @@
     STEPS.forEach(function (s, i) {
       const isDone = s.done(), isCur = cur && cur.id === s.id;
       const by = isDone && s.doneBy && s.doneBy();
-      const locked = !state.connected && i > 0;
+      const locked = !state.connected && i > CONNECT_I;
       const status = isDone ? (by ? 'Done by ' + esc(by) : 'Done') : isCur ? 'Current step' : locked ? 'Needs a connected device' : 'To do';
       html += '<li class="ob-step' + (isDone ? ' is-done' : '') + (isCur ? ' is-current' : '') + (locked ? ' is-locked' : '') + '">' +
         '<span class="ob-step__num" aria-hidden="true">' + (isDone ? '✓' : i + 1) + '</span>' +
@@ -466,6 +473,133 @@
     return html + '</section>';
   }
 
+  // ---- Overview wizard: one step at a time ------------------------------
+  // Each step explains what and why, then jumps to the real page. A step finishes when its object exists;
+  // it then shows what was made (and by whom) with Next or Set up another, until acknowledged.
+  const TL_CMD = 'sudo snap set canonical/telemetry/endpoint \\\n  url=https://telemetry.canonical.com \\\n  token=tok_7f3a…c91e';
+  const TL_CLOUDINIT = '#cloud-config\nruncmd:\n  - snap set canonical/telemetry/endpoint url=https://telemetry.canonical.com token=tok_7f3a…c91e';
+  let wizView = null, connectMore = false;
+  const WIZ = {
+    about: { label: 'About you', icon: '?' },
+    connect: { label: 'Devices', icon: '▣' },
+    group: { label: 'Groups', icon: '▦', cta: 'Go to Groups', another: 'Create another group', anotherHref: '#/groups/new' },
+    policy: { label: 'Policy', icon: '≡', cta: 'Go to Policies', another: 'Create another policy', anotherHref: '#/policies/new' },
+    connector: { label: 'Connector', icon: '⇄', cta: 'Go to Connectors', another: 'Add another connector', anotherHref: '#/connectors/new' },
+    flow: { label: 'Data flow', icon: '⇶', cta: 'Open Data flow' }
+  };
+  function acked(id) { return (state.wizAck || []).indexOf(id) >= 0; }
+  function ack(id) { if (!state.wizAck) state.wizAck = []; if (!acked(id)) state.wizAck.push(id); }
+  function stepById(id) { return STEPS.filter(function (s) { return s.id === id; })[0]; }
+  function wizStep() { return STEPS.filter(function (s) { return !s.done() || (s.id !== 'flow' && !acked(s.id)); })[0] || null; }
+  function lastOf(list) { return list[list.length - 1]; }
+  function byLine(o) { return (o.by === ME ? 'Created by you' : 'Created by ' + esc(o.by)) + (o.at ? ', ' + ago(o.at) : ''); }
+
+  function moduleWizard() {
+    const w = wizStep(); if (!w) return '';
+    const vs = wizView && wizView !== w.id ? stepById(wizView) : null;
+    const s = vs && vs.done() ? vs : w;
+    const wi = STEPS.indexOf(w);
+    let html = '<section class="p-card ob-module ob-wiz" aria-labelledby="ob-title">' +
+      '<div class="ob-module__head"><h2 class="ob-module__title" id="ob-title">Set up telemetry</h2>' +
+      '<span class="ob-progress">Step ' + (wi + 1) + ' of ' + STEPS.length + '</span></div>';
+    if (J().joiner) html += '<p class="ob-intro"><strong>' + ANA + ' invited you and has started setting up.</strong> Steps she has done show her name.</p>';
+    html += '<ol class="ob-wiz__bar">' + STEPS.map(function (st, k) {
+      const done = st.done() && (acked(st.id) || st.id === 'flow'), cur = k === wi, view = st === s;
+      const cls = 'ob-wiz__seg' + (done ? ' is-done' : '') + (cur ? ' is-current' : '') + (view ? ' is-viewing' : '');
+      const lab = esc(WIZ[st.id].label);
+      return '<li>' + (done && !cur
+        ? '<button type="button" class="' + cls + '" data-act="wiz-view" data-id="' + st.id + '"' + (view ? ' aria-current="step"' : '') + '>' + lab + '<span class="u-sr"> (done, review)</span></button>'
+        : '<span class="' + cls + '"' + (view ? ' aria-current="step"' : '') + '>' + lab + '</span>') + '</li>';
+    }).join('') + '</ol>';
+    html += '<div class="ob-wiz__panel">' + (s.done() ? wizDone(s, s !== w) : wizTodo(s)) + '</div>';
+    const next = STEPS[wi + 1];
+    html += '<div class="ob-wiz__foot"><span>' + (next ? 'Next: ' + esc(next.title) : 'Last step') + '</span>' +
+      '<span><a class="p-link" href="#/settings">Invite colleagues</a> · <a class="p-link" href="#/destinations/new">Add a destination</a></span></div>';
+    return html + '</section>';
+  }
+
+  function wizTodo(s) {
+    const m = WIZ[s.id];
+    let html = '<span class="ob-wiz__icon" aria-hidden="true">' + m.icon + '</span><h3 class="ob-wiz__title">' + esc(s.title) + '</h3>' +
+      '<p class="ob-wiz__why">' + s.why + '</p><div class="ob-wiz__body">';
+    if (s.id === 'about') html += aboutBody(true);
+    else if (s.id === 'connect') html += connectWiz(false);
+    else html += '<div class="ob-step__cta ob-wiz__cta"><a class="p-button p-button--positive" href="#/' + s.route + (s.id === 'connector' ? '/new' : '') + '">' + m.cta + '</a>' +
+      (s.id === 'group' ? '<button type="button" class="p-link" data-act="use-all">Skip, use all devices</button>' : '') + '</div>';
+    return html + '</div>';
+  }
+
+  function wizDone(s, reviewing) {
+    const m = WIZ[s.id];
+    if (s.id === 'connect' && connectMore) return '<h3 class="ob-wiz__title">Connect more devices</h3>' +
+      '<p class="ob-wiz__why">New devices connect the same way. Each one is counted here once it starts sending.</p><div class="ob-wiz__body">' + connectWiz(true) + '</div>';
+    let title = '', lines = [], another = '';
+    if (s.id === 'about') {
+      const said = !state.aboutSkipped && state.intents.length;
+      title = said ? 'We’ll start from what you want to do' : 'You preferred not to say';
+      if (said) {
+        lines.push('You want to: ' + state.intents.map(function (id) { return esc(INTENTS.filter(function (x) { return x.id === id; })[0].label.toLowerCase()); }).join(', ') + '.');
+        lines.push('Policy templates for ' + esc(INTENTS.filter(function (x) { return x.id === state.primary; })[0].label.toLowerCase()) + ' come first.');
+      } else lines.push('Policy templates are shown in their usual order.');
+      another = '<button type="button" class="p-link" data-act="about-change">Change answers</button>';
+    } else if (s.id === 'connect') {
+      title = n(devices().length) + ' devices connected';
+      lines.push(J().landscape ? 'Endpoint set from Landscape' + (state.connectedAt ? ', ' + ago(state.connectedAt) : '') + '.' : 'Sending to telemetry' + (state.connectedAt ? ' since ' + ago(state.connectedAt) : '') + '.');
+      lines.push('They only exchange updates with the Canonical Snap Store until you add a connector.');
+      another = '<button type="button" class="p-link" data-act="connect-more">Connect more devices</button>';
+    } else if (s.id === 'group') {
+      const g = lastOf(userGroups());
+      if (!g) { title = 'Groups skipped'; lines.push('Connectors use All devices (' + n(devices().length) + ').'); another = '<a class="p-link" href="#/groups/new">Create a group</a>'; }
+      else { title = 'Group created'; lines.push('<a class="p-link" href="#/groups">' + esc(g.name) + '</a>, ' + g.kind + ', ' + n(groupDevices(g).length) + ' devices'); lines.push(byLine(g)); }
+    } else if (s.id === 'policy') {
+      const p = lastOf(state.policies); title = 'Policy created';
+      lines.push('<a class="p-link" href="#/policies">' + esc(p.name) + '</a>'); lines.push(byLine(p));
+    } else if (s.id === 'connector') {
+      const c = lastOf(userConnectors()), g = groupById(c.group), d = destById(c.dest); title = 'Connector created';
+      lines.push('<a class="p-link" href="#/connectors">' + esc(c.name) + '</a>');
+      lines.push(esc(g ? g.name : 'All devices') + ' to ' + esc(d ? d.name : 'a destination') + '. Data is leaving your devices now.');
+      lines.push(byLine(c));
+    }
+    if (!another && m.another) another = '<a class="p-link" href="' + m.anotherHref + '">' + m.another + '</a>';
+    const primary = reviewing
+      ? '<button type="button" class="p-button" data-act="wiz-back">Back to step ' + (STEPS.indexOf(wizStep()) + 1) + '</button>'
+      : '<button type="button" class="p-button p-button--positive" data-act="wiz-next" data-id="' + s.id + '">Next</button>';
+    return '<span class="ob-wiz__icon is-done" aria-hidden="true">✓</span><h3 class="ob-wiz__title">' + title + '</h3>' +
+      '<div class="ob-wiz__summary">' + lines.map(function (l) { return '<p>' + l + '</p>'; }).join('') + '</div>' +
+      '<div class="ob-step__cta ob-wiz__cta">' + primary + another + '</div>';
+  }
+
+  function connectWiz(more) {
+    if (waiting) return '<div class="ob-waiting ob-wiz__cta" role="status"><span class="ob-spinner" aria-hidden="true"></span>Setting the endpoint and waiting for devices…</div>';
+    let html = '<p class="ob-wiz__safe">New devices only exchange updates with the Canonical Snap Store. Nothing else leaves them until you add a connector.</p>';
+    if (J().landscape) {
+      html += '<div class="ob-connect"><p><strong>Landscape knows ' + n(ALL.length) + ' devices.</strong> ' +
+        (more ? 'Set the telemetry endpoint on more of them from Landscape.' : 'None of them send to telemetry yet. Set the telemetry endpoint on them from Landscape in one step.') + '</p>' +
+        '<div class="ob-connect__row"><label class="p-field"><span class="p-field__label">Landscape group</span><select class="p-select" id="ls-group"><option>All devices (' + n(ALL.length) + ')</option></select></label>' +
+        (more ? '' : '<button type="button" class="p-button p-button--positive" data-act="connect">Set endpoint from Landscape</button>') + '</div></div>';
+    } else {
+      html += '<div class="ob-routes">' +
+        '<div class="ob-route"><h4>From Landscape</h4><p>Link Landscape and set the endpoint on your whole fleet at once.</p><a class="p-link" href="#/settings">Link Landscape</a></div>' +
+        '<div class="ob-route"><h4>In your image</h4><p>Set it when devices are built or provisioned, for example with cloud-init.</p><pre class="ob-code ob-code--small"><code>' + esc(TL_CLOUDINIT) + '</code></pre></div>' +
+        '<div class="ob-route"><h4>On one device</h4><p>Try it on a single machine first.</p><pre class="ob-code ob-code--small"><code>' + esc(TL_CMD) + '</code></pre></div></div>' +
+        '<p class="ob-hint">snapd sends telemetry once confdb holds the endpoint. No agent to install. The confdb schema and view names are placeholders for engineering to confirm.</p>';
+    }
+    if (more) return html + '<div class="ob-step__cta ob-wiz__cta"><button type="button" class="p-button" data-act="connect-more-done">Done</button></div>';
+    return html + '<div class="ob-listening" role="status"><span class="ob-dot" aria-hidden="true"></span>Waiting for a device. This step finishes on its own.</div>' +
+      '<div class="ob-step__cta ob-wiz__cta"><a class="p-button" href="#/settings">Ask someone to connect devices</a>' +
+      (J().landscape ? '' : '<button type="button" class="p-link" data-act="connect">Demo: a device connects</button>') + '</div>' + diagHtml();
+  }
+
+  function diagHtml() {
+    return '<details class="ob-diag"><summary>Devices should already be connected?</summary>' +
+      '<ol class="ob-diag__list">' +
+      (J().rejected ? '<li><span class="p-badge p-badge--negative">Seen</span> <strong>12 connection attempts rejected in the last hour.</strong> The token belongs to another organisation (acme-labs). Check which token your devices use.</li>' : '') +
+      (J().landscape && J().optedOut ? '<li><span class="p-badge">Seen</span> <strong>3 devices in Landscape have opted out of telemetry.</strong> That is their choice, not a fault, and they keep getting updates.</li>' : '') +
+      '<li><strong>Network.</strong> A proxy, firewall or allowlist may be blocking telemetry.canonical.com.</li>' +
+      '<li><strong>Snap version.</strong> Devices need a recent snapd to send telemetry.</li>' +
+      '<li><strong>Certificates or clock.</strong> A device with the wrong time fails the TLS check.</li></ol></details>';
+  }
+
   let waiting = false;
   function connectBody() {
     if (waiting) return '<div class="ob-waiting" role="status"><span class="ob-spinner" aria-hidden="true"></span>Waiting for your first device…</div>';
@@ -476,21 +610,15 @@
         '<button type="button" class="p-button p-button--positive" data-act="connect">Point devices at telemetry</button></div></div>';
     } else {
       html += '<div class="ob-connect"><p>Run this on a device. Your organisation token is already filled in.</p>' +
-        '<pre class="ob-code"><code>sudo snap set system telemetry.endpoint=telemetry.canonical.com \\\n  telemetry.token=tok_7f3a…c91e</code></pre>' +
-        '<p class="ob-hint">Placeholder command: the real mechanism is for engineering to confirm.</p>' +
+        '<pre class="ob-code"><code>' + esc(TL_CMD) + '</code></pre>' +
+        '<p class="ob-hint">snapd sends telemetry once confdb holds the endpoint. Schema and view names are placeholders.</p>' +
         '<button type="button" class="p-button" data-act="connect">Simulate a device connecting</button></div>';
     }
-    html += '<details class="ob-diag"><summary>Devices should already be connected?</summary>' +
-      '<ol class="ob-diag__list">' +
-      (J().rejected ? '<li><span class="p-badge p-badge--negative">Seen</span> <strong>12 connection attempts rejected in the last hour.</strong> The token belongs to another organisation (acme-labs). Check which token your devices use.</li>' : '') +
-      (J().landscape && J().optedOut ? '<li><span class="p-badge">Seen</span> <strong>3 devices in Landscape have opted out of telemetry.</strong> That is their choice, not a fault, and they keep getting updates.</li>' : '') +
-      '<li><strong>Network.</strong> A proxy, firewall or allowlist may be blocking telemetry.canonical.com.</li>' +
-      '<li><strong>Snap version.</strong> Devices need a recent snapd to send telemetry.</li>' +
-      '<li><strong>Certificates or clock.</strong> A device with the wrong time fails the TLS check.</li></ol></details>';
+    html += diagHtml();
     return html;
   }
 
-  function aboutBody() {
+  function aboutBody(wiz) {
     const sel = state.intents;
     let html = '<fieldset class="ob-intents"><legend class="p-field__label">What do you want to do? Choose any.</legend>';
     INTENTS.forEach(function (i) {
@@ -508,7 +636,7 @@
     }
     if (sel.indexOf('governance') >= 0) html += '<p class="ob-hint">Approvals for data flows come in a later release. For now every change is logged and other admins are notified.</p>';
     html += '<div class="ob-step__cta"><button type="button" class="p-button p-button--positive" data-act="about-save"' + (sel.length ? '' : ' disabled') + '>Continue</button>' +
-      '<button type="button" class="p-link" data-act="about-skip">Skip</button></div>';
+      '<button type="button" class="p-link" data-act="about-skip">' + (wiz ? 'Prefer not to say' : 'Skip') + '</button></div>';
     return html;
   }
 
@@ -1210,7 +1338,7 @@
 
 
   // ---- Jig drawer (prototype controls) ---------------------------------
-  const ORDER = ['connect', 'about', 'group', 'policy', 'connector', 'flow'];
+  const ORDER = ['about', 'connect', 'group', 'policy', 'connector', 'flow'];
   function complete(step) {
     if (step === 'connect') { state.connected = true; state.connectedAt = now(); log(J().landscape ? 'pointed <strong>' + n(ALL.length) + ' devices</strong> at telemetry from Landscape' : 'connected the first device'); }
     else if (step === 'about') { state.intents = ['cost', 'monitoring']; state.primary = 'monitoring'; state.aboutDone = true; }
@@ -1230,6 +1358,7 @@
     if (wasJoiner) { setJoiner(state, true); ['group', 'policy', 'connector'].forEach(function (k) { if (ana[k]) setAna(state, k, true); }); }
     const upto = stepId === 'done' ? ORDER.length : ORDER.indexOf(stepId);
     for (let i = 0; i < upto; i++) complete(ORDER[i]);
+    state.wizAck = ORDER.slice(0, upto);
     if (stepId === 'done') state.setupNoted = true;
   }
   function renderJig() {
@@ -1256,6 +1385,8 @@
         chk('ana-connector', anaHas(state, 'connector'), ANA + ' created a connector', 'To an internal Splunk', !j.joiner) +
         chk('pending', pending, 'An invitation is unanswered', 'Adds a task after setup') + '</section>' +
       '<section class="ob-jig__sec"><h3>My progress</h3>' +
+        '<label class="ob-jig__field"><span>Onboarding layout</span><select class="p-select" data-jig="layout">' +
+        [['wizard', 'Wizard (one step at a time)'], ['list', 'List (previous version)']].map(function (o) { return '<option value="' + o[0] + '"' + ((j.layout || 'wizard') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>' +
         '<label class="ob-jig__field"><span>Start at</span><select class="p-select" data-jig="jump-to">' +
         STEPS.map(function (st, i) { return '<option value="' + st.id + '"' + (cur && cur.id === st.id ? ' selected' : '') + '>Step ' + (i + 1) + ': ' + esc(st.title) + '</option>'; }).join('') +
         '<option value="done"' + (!cur ? ' selected' : '') + '>Setup complete</option></select></label>' +
@@ -1279,6 +1410,7 @@
     const k = el.getAttribute('data-jig'), on = el.checked;
     if (k === 'fleet') { location.href = location.pathname + '?fleet=' + el.value + location.hash; return; }
     if (k === 'landscape' || k === 'rejected' || k === 'optedOut' || k === 'degraded') state.jig[k] = on;
+    else if (k === 'layout') { state.jig.layout = el.value; wizView = null; connectMore = false; }
     else if (k === 'connected') { state.connected = on; waiting = false; }
     else if (k === 'joiner') setJoiner(state, on);
     else if (/^ana-/.test(k)) setAna(state, k.slice(4), on);
@@ -1316,17 +1448,23 @@
   main.addEventListener('click', function (e) {
     const b = e.target.closest('[data-act]'); if (!b) return;
     const act = b.getAttribute('data-act');
-    if (act === 'use-all') { state.useAll = true; log('chose to use <strong>All devices</strong> for the first connector'); save(); go('overview'); render(); }
+    if (act === 'use-all') { state.useAll = true; ack('group'); log('chose to use <strong>All devices</strong> for the first connector'); save(); go('overview'); render(); }
     else if (act === 'connect') {
       waiting = true; render();
       setTimeout(function () {
         waiting = false; state.connected = true; state.connectedAt = now();
         log(J().landscape ? 'pointed <strong>' + n(ALL.length) + ' devices</strong> at telemetry from Landscape' : 'connected the first device');
-        save(); toast(J().landscape ? n(ALL.length) + ' devices connected' : 'First device connected'); render();
+        save(); toast(n(ALL.length) + ' devices connected'); render();
       }, 2200);
     }
-    else if (act === 'about-save') { state.aboutDone = true; if (!state.primary || state.intents.indexOf(state.primary) < 0) state.primary = state.intents[0]; save(); render(); }
-    else if (act === 'about-skip') { state.aboutDone = true; save(); render(); }
+    else if (act === 'about-save') { state.aboutDone = true; state.aboutSkipped = false; ack('about'); if (!state.primary || state.intents.indexOf(state.primary) < 0) state.primary = state.intents[0]; save(); render(); }
+    else if (act === 'about-skip') { state.aboutDone = true; state.aboutSkipped = true; state.intents = []; state.primary = null; ack('about'); save(); render(); }
+    else if (act === 'wiz-next') { ack(b.getAttribute('data-id')); wizView = null; connectMore = false; save(); render(); }
+    else if (act === 'wiz-view') { wizView = b.getAttribute('data-id'); connectMore = false; render(); }
+    else if (act === 'wiz-back') { wizView = null; connectMore = false; render(); }
+    else if (act === 'about-change') { state.aboutDone = false; state.aboutSkipped = false; state.wizAck = (state.wizAck || []).filter(function (x) { return x !== 'about'; }); wizView = null; save(); render(); }
+    else if (act === 'connect-more') { connectMore = true; render(); }
+    else if (act === 'connect-more-done') { connectMore = false; render(); }
     else if (act === 'dismiss-setup') { state.setupNoted = true; save(); render(); }
     else if (act === 'set-age') { state.age = +b.getAttribute('data-age'); flowRange = '7d'; flowIdx = 6; save(); render(); }
     else if (act === 'tl-prev' || act === 'tl-next') { stopPlay(); flowIdx = Math.max(0, Math.min(curRange().n - 1, flowIdx + (act === 'tl-next' ? 1 : -1))); render(); }

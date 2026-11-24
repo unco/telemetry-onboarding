@@ -208,3 +208,48 @@ body.jig-open .ob-jig { transform: none; }
 .ob-timeline { margin: 8px -16px 0; }
 .ob-demo .p-link { font-size: inherit; }
 .ob-timeline__step { font-size: .8125rem; color: var(--muted); margin-left: auto; }
+
+/* Overview wizard ---------------------------------------------------------- */
+.ob-wiz { max-width: 760px; }
+.ob-wiz__bar { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; list-style: none; margin: 8px 0 24px; padding: 0; }
+.ob-wiz__seg { display: flex; flex-direction: column; gap: 6px; width: 100%; font: inherit; font-size: .75rem; line-height: 1.2; color: var(--faint); border: 0; background: none; padding: 0; text-align: left; }
+.ob-wiz__seg::before { content: ""; display: block; height: 4px; background: var(--border); }
+.ob-wiz__seg.is-done { color: var(--muted); }
+button.ob-wiz__seg { cursor: pointer; }
+button.ob-wiz__seg:hover { color: var(--ink); text-decoration: underline; }
+.ob-wiz__seg.is-done::before { background: var(--positive); }
+.ob-wiz__seg.is-current { color: var(--ink); font-weight: 500; }
+.ob-wiz__seg.is-current::before { background: var(--ink); }
+.ob-wiz__seg.is-viewing:not(.is-current)::before { background: var(--link); }
+.ob-wiz__panel { text-align: center; padding: 4px 0; }
+.ob-wiz__icon { width: 56px; height: 56px; border-radius: 50%; border: 1px dashed var(--border-strong); display: inline-flex; align-items: center; justify-content: center; font-size: 1.5rem; color: var(--muted); margin-bottom: 12px; }
+.ob-wiz__icon.is-done { border: 0; background: var(--positive); color: #fff; }
+.ob-wiz__title { font-size: 1.5rem; font-weight: 300; margin: 0 0 6px; }
+.ob-wiz__why { margin: 0 auto 16px; max-width: 56ch; color: var(--muted); }
+.ob-wiz__body { text-align: left; max-width: 680px; margin: 0 auto; }
+.ob-wiz__cta { justify-content: center; }
+.ob-wiz__safe { text-align: center; margin: 0 auto 16px; max-width: 56ch; }
+.ob-wiz__summary { display: inline-block; text-align: left; border: 1px solid var(--border); background: var(--bg-softer); padding: 10px 16px; margin: 4px auto 4px; min-width: 280px; max-width: 100%; }
+.ob-wiz__summary p { margin: 2px 0; }
+.ob-wiz__summary p + p { color: var(--muted); font-size: .875rem; }
+.ob-wiz__foot { border-top: 1px solid var(--border); margin-top: 24px; padding-top: 12px; font-size: .875rem; color: var(--muted); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.ob-routes { display: grid; gap: 8px; margin-bottom: 8px; }
+.ob-route { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 4px 16px; align-items: start; border: 1px solid var(--border); background: var(--bg-softer); padding: 12px 14px; min-width: 0; }
+.ob-route > :not(h4):not(p):not(a) { grid-column: 2; grid-row: 1 / span 3; }
+.ob-route h4, .ob-route p, .ob-route > a { grid-column: 1; }
+.ob-route .ob-code { white-space: pre-wrap; overflow-wrap: break-word; word-break: normal; }
+@media (max-width: 620px) { .ob-route { grid-template-columns: 1fr; } .ob-route > :not(h4):not(p):not(a) { grid-column: 1; grid-row: auto; } }
+.ob-route h4 { margin: 0 0 4px; font-size: 1rem; font-weight: 500; }
+.ob-route p { margin: 0 0 8px; font-size: .875rem; color: var(--muted); }
+.ob-route .ob-code { margin: 0; }
+.ob-listening { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 16px 0 0; font-size: .875rem; color: var(--muted); }
+.ob-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--link); animation: ob-pulse 1.6s ease-in-out infinite; }
+@keyframes ob-pulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .ob-dot { animation: none; } }
+.ob-wiz .ob-diag { margin-top: 16px; text-align: left; }
+.u-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (max-width: 620px) { .ob-wiz__bar { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 10px; } }
+
+.ob-wiz .ob-intents { border: 0; padding: 0; margin: 0 0 12px; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.ob-wiz .ob-intents legend { width: 100%; text-align: center; margin-bottom: 8px; }
+.ob-wiz .ob-step__cta { justify-content: center; }
