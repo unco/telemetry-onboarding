@@ -254,5 +254,3 @@ button.ob-wiz__seg:hover { color: var(--ink); text-decoration: underline; }
 .ob-wiz .ob-intents { border: 0; padding: 0; margin: 0 0 12px; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
 .ob-wiz .ob-intents legend { width: 100%; text-align: center; margin-bottom: 8px; }
 .ob-wiz .ob-step__cta { justify-content: center; }
-.ob-wiz .p-button--positive { background: #000; border-color: #000; color: #fff; }
-.ob-wiz .p-button--positive:hover { background: #333; border-color: #333; }
